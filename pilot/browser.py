@@ -157,7 +157,8 @@ class BrowserReader:
                 self.page.route('**/*', self._route)
         self.target_url = url
         self._guard()
-        if not self.page.locator('shreddit-post,.thing.link,a[id^="search-post-title-"]').count():
+        composer = u.path.rstrip('/').endswith('/submit') and self.page.locator('textarea[name="title"],input[name="title"]').count() == 1
+        if not composer and not self.page.locator('shreddit-post,.thing.link,a[id^="search-post-title-"]').count():
             raise PilotError('No readable Reddit posts yet. Complete verification and return to the recorded source page.')
         expected = attention.get('expected_account')
         if expected and self._account().lower() != expected.lower():
@@ -312,6 +313,10 @@ class BrowserReader:
         return None
 
     def publish(self, job, workflow):
+        from .campaigns import is_campaign
+        if is_campaign(job['post']):
+            from .thread_publish import publish_thread
+            return publish_thread(self,job,workflow)
         post, draft = job['post'], job['draft']
         self._goto(post['url'])
         username = self._account()
@@ -372,6 +377,10 @@ class BrowserReader:
         raise PilotError('Submission outcome is uncertain; no automatic resend')
 
     def verify_publication(self, job, url):
+        from .campaigns import is_campaign
+        if is_campaign(job['post']):
+            from .thread_publish import verify_thread
+            return verify_thread(self,job,url)
         if not comment_permalink(url,job['post'],self.config['subreddits']):
             raise PilotError('Provide a comment permalink from the original thread')
         self._goto(url)

@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 from .core import PilotError, publisher_for, reddit_url
 from .quality import similar_reply
+from .campaigns import is_campaign, publication_text, require_post_policy, thread_permalink
 
 
 def draft_hash(text):
@@ -106,12 +107,12 @@ class Workflow:
         if c.execute("SELECT 1 FROM outbox WHERE state IN ('checking','submitting') AND item_id!=?",(item_id,)).fetchone():
             return 'Another publication is being checked'
         recent=[r for r in attempts if now-r['at']<86400]
-        if len(recent)>=pub.get('max_per_day',3):return 'Daily reply limit reached; waiting for the rolling 24-hour window'
+        if len(recent)>=pub.get('max_per_day',3):return 'Daily publication limit reached; waiting for the rolling 24-hour window'
         if recent and now-max(r['at'] for r in recent)<pub.get('min_interval_seconds',7200):
-            return 'Global reply cooldown is active'
+            return 'Global publication cooldown is active'
         local=[r for r in recent if r['subreddit']==post['subreddit'].lower()]
-        if len(local)>=pub.get('max_per_subreddit_day',2):return 'Community daily reply limit reached'
-        if local and now-max(r['at'] for r in local)<pub.get('subreddit_interval_seconds',21600):return 'Community reply cooldown is active'
+        if len(local)>=pub.get('max_per_subreddit_day',2):return 'Community daily publication limit reached'
+        if local and now-max(r['at'] for r in local)<pub.get('subreddit_interval_seconds',21600):return 'Community publication cooldown is active'
         author=self.author_key(post)
         if author and any(r['author_hash']==author and now-r['at']<pub.get('author_cooldown_hours',168)*3600 for r in attempts):
             return 'This author was already contacted within the cooldown period'
@@ -134,8 +135,11 @@ class Workflow:
             row = c.execute('SELECT * FROM items WHERE id=?', (item_id,)).fetchone()
             if not row or row['status'] != 'approved' or not row['result']:
                 raise PilotError('Only approved drafts can be queued for publication')
-            draft = json.loads(row['result'])['draft']
-            if not expected_hash or draft_hash(draft) != expected_hash:
+            result = json.loads(row['result'])
+            draft = result['draft']
+            post = json.loads(row['payload'])
+            if is_campaign(post): require_post_policy(post,config)
+            if not expected_hash or draft_hash(publication_text(result)) != expected_hash:
                 raise PilotError('The draft changed; refresh and review it again')
             if time.time()-row['updated'] > config.get('publishing', {}).get('approval_hours', 24)*3600:
                 raise PilotError('Approval expired; review a fresh draft')
@@ -167,7 +171,7 @@ class Workflow:
         with self.store.db() as c:
             c.execute('BEGIN IMMEDIATE')
             row=c.execute('SELECT o.*,i.status AS item_status,i.result,i.payload FROM outbox o JOIN items i ON i.id=o.item_id WHERE item_id=?',(item_id,)).fetchone()
-            if not row or row['state']!='blocked' or row['item_status']!='approved' or row['draft_hash']!=expected_hash or not row['result'] or draft_hash(json.loads(row['result'])['draft'])!=expected_hash:
+            if not row or row['state']!='blocked' or row['item_status']!='approved' or row['draft_hash']!=expected_hash or not row['result'] or draft_hash(publication_text(json.loads(row['result'])))!=expected_hash:
                 raise PilotError('Only a failed preflight with an unchanged approved draft can be retried')
             if time.time()-row['requested']>config['publishing'].get('approval_hours',24)*3600:
                 raise PilotError('Approval expired; review a fresh draft')
@@ -183,35 +187,43 @@ class Workflow:
             c.execute('BEGIN IMMEDIATE')
             rows = c.execute("SELECT o.*,i.payload,i.status AS item_status,i.result FROM outbox o JOIN items i ON i.id=o.item_id WHERE o.state='ready' ORDER BY requested").fetchall()
             for row in rows:
-                if row['item_status'] != 'approved' or now-row['requested'] > pub.get('approval_hours', 24)*3600 or not row['result'] or draft_hash(json.loads(row['result'])['draft']) != row['draft_hash']:
+                if row['item_status'] != 'approved' or now-row['requested'] > pub.get('approval_hours', 24)*3600 or not row['result'] or draft_hash(publication_text(json.loads(row['result']))) != row['draft_hash']:
                     c.execute("UPDATE outbox SET state='cancelled',error='Approval expired or draft changed',updated=? WHERE item_id=?", (now,row['item_id']))
                     continue
                 post=json.loads(row['payload'])
                 if not row['reddit_username'] or row['reddit_username'] != publisher_for(config,post['subreddit']).lower():
                     c.execute("UPDATE outbox SET state='blocked',error='Publishing account changed; this attempt cannot be rerouted',updated=? WHERE item_id=?",(now,row['item_id']))
                     continue
+                if is_campaign(post):
+                    try: require_post_policy(post,config)
+                    except PilotError as error:
+                        c.execute("UPDATE outbox SET state='blocked',error=?,updated=? WHERE item_id=?",(str(error),now,row['item_id']))
+                        continue
                 reason=self._wait_reason(c,post,config,now,row['item_id'])
                 if reason:
                     c.execute('UPDATE outbox SET error=? WHERE item_id=?',(reason,row['item_id']))
                     continue
                 c.execute("UPDATE outbox SET state='checking',error=NULL,updated=? WHERE item_id=?", (now,row['item_id']))
-                return dict(row, post=post)
+                return dict(row, post=post, title=json.loads(row['result']).get('title',''))
             return None
 
     def mark_submitting(self, item_id, config=None):
         with self.store.db() as c:
             c.execute('BEGIN IMMEDIATE')
             row = c.execute('SELECT o.state,i.status,i.result,i.payload,o.draft_hash FROM outbox o JOIN items i ON i.id=o.item_id WHERE item_id=?', (item_id,)).fetchone()
-            if self.store.setting('paused') == '1' or not row or row['state'] != 'checking' or row['status'] != 'approved' or not row['result'] or draft_hash(json.loads(row['result'])['draft']) != row['draft_hash']:
+            if self.store.setting('paused') == '1' or not row or row['state'] != 'checking' or row['status'] != 'approved' or not row['result'] or draft_hash(publication_text(json.loads(row['result']))) != row['draft_hash']:
                 raise PilotError('Publication cancelled before submission')
             if config:
+                post=json.loads(row['payload'])
+                if is_campaign(post): require_post_policy(post,config)
                 reason=self._wait_reason(c,json.loads(row['payload']),config,time.time(),item_id)
                 if reason:raise PilotError(reason)
             c.execute("UPDATE outbox SET state='submitting',submitted=?,updated=? WHERE item_id=?", (time.time(),time.time(),item_id))
 
     def publication_done(self, job, permalink, config):
-        if not comment_permalink(permalink, job['post'], config['subreddits']):
-            raise PilotError('Published comment permalink did not match the source thread')
+        check = thread_permalink if is_campaign(job['post']) else comment_permalink
+        if not check(permalink, job['post'], config['subreddits']):
+            raise PilotError('Publication permalink did not match its approved destination')
         with self.store.db() as c:
             c.execute('BEGIN IMMEDIATE')
             c.execute("UPDATE outbox SET state='published',permalink=?,updated=?,error=NULL WHERE item_id=?", (permalink,time.time(),job['item_id']))

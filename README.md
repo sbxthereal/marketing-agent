@@ -36,7 +36,7 @@ Replies aim for 40–65 words, recommend MeDo in the opening sentence, reference
 
 ## Scope
 
-This release handles top-level replies to new posts in one or two selected communities. It does not claim to find all Reddit conversations, monitor every new comment, publish standalone promotional threads, or measure registrations without a connected attribution system. In r/nocode, product launches belong in the designated monthly launch thread; any future promotional-post support must honor that.
+This release handles top-level replies and a separate queue for reviewed standalone text posts in selected communities. It does not claim to find all Reddit conversations, monitor every new comment, or measure registrations without a connected attribution system. In r/nocode, product launches belong in the designated monthly launch thread; standalone promotional posting remains blocked unless community-specific permission is recorded. A permitted launch-thread comment is not permission for a standalone post.
 
 The catalog contains documented MeDo capabilities and two official showcase starting points. `verified` means the cited source was checked; the showcase apps have not been functionally certified. Drafts must preserve those limitations.
 
@@ -63,3 +63,15 @@ A detected human-verification page (including HTTP 200 with the title “Prove y
 There is no CAPTCHA solver, challenge-clicking loop, external solving service, or account failover. Checking access does not publish, consume model calls, reload the challenge or resend blocked/uncertain replies. Successfully checked discovery can continue; a blocked publication preflight still needs explicit review/retry. Model work continues through Comate OneAPI.
 
 Alerts survive worker restarts. Managed browser challenge tabs are kept open on worker disconnect. If the browser/tab was closed, open the recorded source in that same server profile before checking again; ambiguous or missing tabs do not count as solved. The update does not enable live-collection permissions or publishing.
+
+## MeDo post queue
+
+The dashboard separates **Replies** from **MeDo posts**. On the server-local dashboard, choose a configured community, a tutorial/template/build-note format, and a specific brief. An explicitly queued brief gets two metered Comate OneAPI calls: drafting, then an independent claim/style edit. This queue can draft while browser discovery is paused; it never needs to open Reddit. Malformed or unsupported copy is held, and missing editor budget never releases an unchecked draft. Gateway failures stay on the affected brief.
+
+The review shows the proposed title and body. Affiliation is added by code; a catalog link is included only when the recorded rules permit links. Title and body are bound together in the approval hash. Approval and **Publish approved post** remain separate actions. Replies and posts use the same outbox, global/community cooldowns, duplicate checks and uncertainty handling. The company-network dashboard remains read-only.
+
+A new post can be drafted before rules are recorded, but cannot be queued for publication without a matching community policy in `config.json`. After a policy changes, create a fresh draft and review it again. Policy keys are lowercase configured community names. Each policy needs `standalone_posts: true`, `links_allowed: true/false`, a nonempty `reference` and `notes`, and `reviewed_at` as a Unix timestamp from a real review within 30 days. No community permission is enabled by default, and adding a policy does not override the existing platform/account permission gates.
+
+Text-post submission verifies the logged-in account, composer community, approved title/body, unchanged policy and final post permalink. A required flair, unsupported composer layout, CAPTCHA or ambiguous destination stops submission. If a send may have happened, the worker pauses and requires reconciliation; it never repeats the click automatically. Use `python -m pilot reconcile --item CAMPAIGN_ID --url POST_PERMALINK` for an unresolved post attempt. Manual publication recording is explicitly unverified and consumes the shared posting allowance.
+
+The automated post composer is tested with intercepted local browser fixtures. A real authenticated Reddit composer still needs a supervised validation; fixture success is not evidence of live publication. No account signup, CAPTCHA solver or activity disguised as independent customers is included.

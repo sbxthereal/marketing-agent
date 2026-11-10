@@ -86,6 +86,16 @@ def load_config(root, filename='config.json'):
             raise PilotError('Invalid publishing setting: '+name)
     if pub.get('reddit_username') and not re.fullmatch(r'[A-Za-z0-9_-]{3,20}',pub['reddit_username']):
         raise PilotError('Invalid expected Reddit username')
+    policies = config.setdefault('community_policies', {})
+    if not isinstance(policies, dict) or any(k not in {s.lower() for s in subs} for k in policies):
+        raise PilotError('Community policies must name configured communities in lowercase')
+    for entry in policies.values():
+        if (not isinstance(entry,dict) or type(entry.get('standalone_posts',False)) is not bool or
+                type(entry.get('links_allowed',False)) is not bool or
+                not isinstance(entry.get('reference',''),str) or len(entry.get('reference',''))>1000 or
+                not isinstance(entry.get('notes',''),str) or len(entry.get('notes',''))>3000 or
+                type(entry.get('reviewed_at',0)) not in (int,float)):
+            raise PilotError('Invalid standalone-post community policy')
     from .ixbrowser import validate_profiles
     validate_profiles(config)
     return config
@@ -245,14 +255,15 @@ class Store:
                                (post['id'], json.dumps(post, ensure_ascii=False), now, now, rank(post,now)[0]))
             return cursor.rowcount == 1
 
-    def claim(self, max_attempts):
+    def claim(self, max_attempts, kind=None):
         now = time.time()
         with self.db() as c:
             c.execute('BEGIN IMMEDIATE')
             # Recover leases, retaining attempt counts across crashes.
             c.execute("UPDATE items SET status=CASE WHEN attempts>=? THEN 'error' ELSE 'queued' END, error='Interrupted run; lease expired' WHERE status='processing' AND lease_until<?", (max_attempts, now))
             # Aging lets unusual requests rise instead of starving behind keywords.
-            row = c.execute("SELECT * FROM items WHERE status='queued' AND next_try<=? AND attempts<? ORDER BY priority+MIN(100,(?-created)/3600.0*5) DESC,created LIMIT 1", (now, max_attempts,now)).fetchone()
+            clause = " AND json_extract(payload,'$.kind')='campaign'" if kind == 'campaign' else " AND json_extract(payload,'$.kind')!='campaign'" if kind == 'reply' else ''
+            row = c.execute("SELECT * FROM items WHERE status='queued' AND next_try<=? AND attempts<?"+clause+" ORDER BY priority+MIN(100,(?-created)/3600.0*5) DESC,created LIMIT 1", (now, max_attempts,now)).fetchone()
             if not row:
                 return None
             c.execute("UPDATE items SET status='processing', attempts=attempts+1, lease_until=?, updated=? WHERE id=?", (now + 180, now, row['id']))
@@ -312,7 +323,12 @@ class Store:
             elif action == 'published' and row['status'] == 'approved' and reddit_url(publication_url, allowed or []):
                 target=urlparse(publication_url).path.strip('/').split('/')
                 source=urlparse(json.loads(row['payload'])['url']).path.strip('/').split('/')
-                if len(target)!=6 or len(source)<4 or target[3]!=source[3] or not target[5].isalnum():
+                from .campaigns import is_campaign, thread_permalink
+                post=json.loads(row['payload'])
+                if is_campaign(post):
+                    if not thread_permalink(publication_url,post,allowed or []):
+                        raise PilotError('Provide a post permalink in the approved community')
+                elif len(target)!=6 or len(source)<4 or target[3]!=source[3] or not target[5].isalnum():
                     raise PilotError('Provide a comment permalink from the original thread')
                 status = 'published'
             else:

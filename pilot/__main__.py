@@ -56,10 +56,10 @@ def main():
                     if not args.item or not args.url:
                         raise PilotError('Reconcile requires --item ID and --url COMMENT_PERMALINK')
                     with store.db() as c:
-                        row=c.execute('SELECT o.*,i.payload FROM outbox o JOIN items i ON i.id=o.item_id WHERE item_id=?',(args.item,)).fetchone()
+                        row=c.execute('SELECT o.*,i.payload,i.result FROM outbox o JOIN items i ON i.id=o.item_id WHERE item_id=?',(args.item,)).fetchone()
                     if not row or row['state'] not in ('uncertain','blocked') or not row['draft']:
                         raise PilotError('No unresolved publication attempt for this item')
-                    job=dict(row,post=json.loads(row['payload']))
+                    job=dict(row,post=json.loads(row['payload']),title=json.loads(row['result']).get('title',''))
                     worker.ensure_browser()
                     url=worker.browser.verify_publication(job,args.url)
                     worker.flow.publication_done(job,url,config)

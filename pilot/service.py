@@ -15,6 +15,7 @@ from .discovery import scan_delay, timestamp
 from .quality import context_skip, hold
 from .platform_support import WorkerLock
 from .attention import Attention
+from .campaigns import analyze_campaign, create_campaign, is_campaign, publication_text, policy, require_post_policy
 
 
 class Worker:
@@ -63,6 +64,7 @@ class Worker:
                 self.store.set_setting('paused','1')
 
     def cycle(self):
+        self.draft_campaigns()
         attention = self.attention.current()
         if attention:
             if attention['state'] == 'checking':
@@ -73,6 +75,33 @@ class Worker:
             self._cycle()
         except BrowserAttention as error:
             self.attention.record(error.details, str(error))
+
+    def draft_campaigns(self):
+        # An explicitly queued team brief needs no Reddit access. A browser pause
+        # blocks discovery/publication, while this separate queue may draft offline.
+        if self.config['ai'] != 'oneapi' or self.stop.is_set():
+            return
+        for _ in range(self.config['max_items_per_cycle']):
+            if self.stop.is_set():
+                break
+            post = self.store.claim(self.config['max_attempts'], kind='campaign')
+            if not post:
+                break
+            try:
+                if not self.gateway:
+                    self.gateway = Gateway(self.root / '.env')
+                result = analyze_campaign(self.gateway,post,shortlist(post,self.catalog),self.config,self.store)
+                if result is None:
+                    self.store.defer_budget(post['id'])
+                    break
+                if result['decision']=='recommend' and self.flow.duplicate_draft(post['id'],result['draft']):
+                    result=hold(result,'MeDo post repeats recent copy; choose a different useful angle')
+                    result['title']=''
+                self.store.complete(post['id'],result)
+            except PilotError as error:
+                # Keep errors on this brief; do not erase browser/CAPTCHA status.
+                self.store.fail(post['id'],str(error),1)
+                break
 
     def check_attention(self, attention):
         # Playwright is thread-affine. HTTP handlers only enqueue this check.
@@ -115,7 +144,7 @@ class Worker:
         for _ in range(self.config['max_items_per_cycle']):
             if self.stop.is_set() or self.store.setting('paused') == '1':
                 break
-            post = self.store.claim(self.config['max_attempts'])
+            post = self.store.claim(self.config['max_attempts'], kind='reply')
             if not post:
                 break
             try:
@@ -246,9 +275,18 @@ def server_for(root, config, store, worker=None, *, read_only=False, bind_host='
                 return self.respond(200, html, 'text/html')
             if self.path == '/api/status':
                 return self.respond(200, dict(store.summary(), browser_attention=attention.current(), read_only_dashboard=read_only, source=config['source'], ai=config['ai'], model=config['model'], poll_seconds=config['poll_seconds'], max_daily_calls=config['max_daily_calls'], max_daily_tokens=config['max_daily_tokens'], publishing='reviewed browser' if config.get('publishing',{}).get('enabled') else 'disabled', validation_snapshot=config.get('validation_snapshot',False), catalog=config['catalog_file'], efficiency=flow.metrics(), pacing=flow.pacing(config),next_scan_at=store.setting('next_scan_at')))
+            if self.path == '/api/campaign-options':
+                return self.respond(200, {'communities':[{'name':sub,'policy':policy(config,sub)} for sub in config['subreddits']], 'enabled':config['ai']=='oneapi'})
             if self.path == '/api/items':
                 outbox = {r['item_id']:r for r in flow.outbox()}
-                return self.respond(200, [dict(r,reply_account=publisher_for(config,r['payload']['subreddit']),draft_hash=draft_hash(r['result']['draft']) if r['result'] else '',publication=outbox.get(r['id'])) for r in store.items()])
+                rows=[]
+                for r in store.items():
+                    blocker=''
+                    if is_campaign(r['payload']):
+                        try: require_post_policy(r['payload'],config)
+                        except PilotError as error: blocker=str(error)
+                    rows.append(dict(r,reply_account=publisher_for(config,r['payload']['subreddit']),draft_hash=draft_hash(publication_text(r['result'])) if r['result'] else '',publication=outbox.get(r['id']),publication_blocker=blocker))
+                return self.respond(200, rows)
             return self.respond(404, {'error': 'Not found'})
 
         def do_POST(self):
@@ -260,7 +298,7 @@ def server_for(root, config, store, worker=None, *, read_only=False, bind_host='
                 return self.respond(415, {'error': 'JSON required'})
             try:
                 n = int(self.headers.get('Content-Length', '0'))
-                if not 0 < n <= 4096:
+                if not 0 < n <= (16384 if self.path == '/api/campaigns' else 4096):
                     raise PilotError('Invalid body size')
                 payload = json.loads(self.rfile.read(n))
                 if not isinstance(payload, dict):
@@ -281,6 +319,11 @@ def server_for(root, config, store, worker=None, *, read_only=False, bind_host='
                     if not worker:
                         raise PilotError('Worker is unavailable; no browser check was started')
                     attention.request_check(payload.get('id'))
+                elif self.path == '/api/campaigns':
+                    if config['ai'] != 'oneapi':
+                        raise PilotError('MeDo post drafting requires OneAPI mode')
+                    campaign=create_campaign(payload,config)
+                    store.ingest(campaign)
                 elif self.path.startswith('/api/review/'):
                     item_id = unquote(self.path[len('/api/review/'):])
                     store.review(item_id, payload.get('action'), payload.get('publication_url', ''), config['subreddits'])
