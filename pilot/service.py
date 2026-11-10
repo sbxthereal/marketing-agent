@@ -8,7 +8,7 @@ import threading
 import time
 from urllib.parse import unquote, urlparse
 
-from .core import PilotError, Store, company_address, load_catalog, load_config, require_live_permission, validate_post
+from .core import PilotError, Store, company_address, load_catalog, load_config, publisher_for, require_live_permission, validate_post
 from .gateway import Gateway, analyze, fixture_result
 from .workflow import Workflow, draft_hash, shortlist, require_publishing
 from .discovery import scan_delay, timestamp
@@ -31,8 +31,12 @@ class Worker:
 
     def ensure_browser(self):
         if not self.browser:
-            from .browser import BrowserReader
-            self.browser = BrowserReader(self.root,self.config,self.catalog,self.flow)
+            if self.config.get('browser_backend') == 'ixbrowser':
+                from .ixbrowser import ProfilePool
+                self.browser = ProfilePool(self.root,self.config,self.catalog,self.flow)
+            else:
+                from .browser import BrowserReader
+                self.browser = BrowserReader(self.root,self.config,self.catalog,self.flow)
 
     def publish_ready(self):
         if self.config['source'] != 'browser' or not self.config.get('publishing',{}).get('enabled'):
@@ -96,6 +100,8 @@ class Worker:
                         post = validate_post(enriched,self.config)
                         self.flow.enrich(post)
                         skip=context_skip(post,self.config.get('publishing',{}).get('reddit_username',''))
+                        for profile in self.config.get('ixbrowser',{}).get('profiles',[]):
+                            skip = skip or context_skip(post,profile['reddit_username'])
                         posted=timestamp(post.get('posted_at'))
                         if posted and time.time()-posted > max(self.config.get('lookback_hours',24),self.config.get('search_lookback_hours',72))*3600:
                             skip='Discussion is older than the discovery window'
@@ -209,7 +215,7 @@ def server_for(root, config, store, worker=None, *, read_only=False, bind_host='
                 return self.respond(200, dict(store.summary(), read_only_dashboard=read_only, source=config['source'], ai=config['ai'], model=config['model'], poll_seconds=config['poll_seconds'], max_daily_calls=config['max_daily_calls'], max_daily_tokens=config['max_daily_tokens'], publishing='reviewed browser' if config.get('publishing',{}).get('enabled') else 'disabled', validation_snapshot=config.get('validation_snapshot',False), catalog=config['catalog_file'], efficiency=flow.metrics(), pacing=flow.pacing(config),next_scan_at=store.setting('next_scan_at')))
             if self.path == '/api/items':
                 outbox = {r['item_id']:r for r in flow.outbox()}
-                return self.respond(200, [dict(r,draft_hash=draft_hash(r['result']['draft']) if r['result'] else '',publication=outbox.get(r['id'])) for r in store.items()])
+                return self.respond(200, [dict(r,reply_account=publisher_for(config,r['payload']['subreddit']),draft_hash=draft_hash(r['result']['draft']) if r['result'] else '',publication=outbox.get(r['id'])) for r in store.items()])
             return self.respond(404, {'error': 'Not found'})
 
         def do_POST(self):

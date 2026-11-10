@@ -25,6 +25,17 @@ class WorkflowTests(unittest.TestCase):
     def test_approval_does_not_schedule_a_send(self):
         self.assertIsNone(self.flow.claim_publication(self.config))
 
+    def test_profile_reassignment_cannot_reroute_an_existing_attempt(self):
+        self.config['browser_backend']='ixbrowser'
+        self.config['ixbrowser']={'profiles':[{'id':1,'reddit_username':'pilot_test','subreddits':['pilottest']}]}
+        self.request()
+        self.config['ixbrowser']['profiles'][0]['reddit_username']='another_account'
+        self.assertIsNone(self.flow.claim_publication(self.config))
+        self.assertEqual(self.flow.outbox()[0]['state'],'blocked')
+        self.assertEqual(self.flow.outbox()[0]['reddit_username'],'pilot_test')
+        with self.assertRaisesRegex(PilotError,'account changed'):
+            self.flow.retry_preflight(self.post['id'],draft_hash(self.draft),self.config)
+
     def test_publishing_disabled_and_stale_draft_rejected(self):
         self.config['publishing']['enabled']=False
         with self.assertRaises(PilotError): self.request()

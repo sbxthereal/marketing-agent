@@ -11,3 +11,6 @@ Sources cloned and inspected on 2026-11-09:
 Playwright 1.64.1 provides routine browser actions (Apache-2.0). The macOS environment is pinned in requirements.lock; the Windows environment is resolved separately in requirements-windows.lock. Packages were obtained from PyPI; downloaded wheels were checked against PyPI SHA-256 metadata during this build. Upstream source checkouts are research material, not vendored into this package. No other project's campaign personas, account credentials, warm-up tactics, or automatic promotional campaigns are used.
 
 Browser Use runs locally against a dedicated Chrome profile. Its paid cloud service and profile sync are not used. Telemetry is disabled before Browser Use is imported. Model calls use the configured Comate OneAPI endpoint.
+# ixBrowser integration
+
+The optional adapter uses the desktop client's [documented local API](https://www.ixbrowser.com/doc/v2/local-api/en) and Playwright CDP attachment. No ixBrowser binaries or SDK code are bundled. The desktop client and API access must be obtained from ixBrowser separately.

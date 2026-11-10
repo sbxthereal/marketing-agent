@@ -34,11 +34,14 @@ def main():
         context=pw.chromium.launch_persistent_context(str(root/'profile'),**chrome_options(True),args=['--remote-debugging-port=0','--remote-debugging-address=127.0.0.1'])
         context.route('**/*',lambda r:r.fulfill(status=200,content_type='text/html',body=page_html) if r.request.url==url else r.abort())
         page=context.pages[0];page.goto(url,wait_until='load')
+        session=context.new_cdp_session(page)
+        target_id=session.send('Target.getTargetInfo')['targetInfo']['targetId']
+        session.detach()
         port=(root/'profile'/'DevToolsActivePort').read_text(encoding='utf-8-sig').splitlines()[0]
         started=time.monotonic()
         report={'kind':'local fixture plus real OneAPI; no Reddit network access'}
         try:
-            posts=agent_discover('http://127.0.0.1:'+port,url,root,config,store,pump=lambda:page.wait_for_timeout(100))
+            posts=agent_discover('http://127.0.0.1:'+port,url,root,config,store,pump=lambda:page.wait_for_timeout(100),target_id=target_id)
             report.update(ok=any(p['href'].endswith('/abc123/help/') for p in posts),posts=posts)
         except Exception as e:
             report.update(ok=False,error=type(e).__name__+': '+str(e)[:300])

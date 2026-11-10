@@ -57,16 +57,30 @@ class BrowserReader:
         from playwright.sync_api import sync_playwright
         self.pw = sync_playwright().start()
         self.profile = self.root / 'runtime' / 'chrome-profile'
+        self.external = self.config.get('browser_backend') == 'ixbrowser'
+        self.attached_browser = None
         try:
-            self.context = self.pw.chromium.launch_persistent_context(
-                str(self.profile), **chrome_options(self.config.get('browser_headless',False)),
-                args=['--remote-debugging-port=0','--remote-debugging-address=127.0.0.1'],
-                accept_downloads=False, viewport={'width':1280,'height':900})
-            self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
+            if self.external:
+                from .ixbrowser import open_profile
+                self.cdp_url = open_profile(self.config['ixbrowser'].get('port',53200), self.config['ixbrowser_profile_id'])
+                self.attached_browser = self.pw.chromium.connect_over_cdp(self.cdp_url)
+                self.context = self.attached_browser.contexts[0]
+                if any(p.url != 'about:blank' and urlparse(p.url).hostname not in
+                       ('www.reddit.com','reddit.com','old.reddit.com') for p in self.context.pages):
+                    raise PilotError('Use a dedicated ixBrowser profile containing only Reddit tabs; close unrelated tabs before resuming')
+                self.page = self.context.new_page()
+            else:
+                self.context = self.pw.chromium.launch_persistent_context(
+                    str(self.profile), **chrome_options(self.config.get('browser_headless',False)),
+                    args=['--remote-debugging-port=0','--remote-debugging-address=127.0.0.1'],
+                    accept_downloads=False, viewport={'width':1280,'height':900})
+                self.page = self.context.pages[0] if self.context.pages else self.context.new_page()
             self.page.set_default_timeout(12000)
-            self.context.route('**/*', self._route)
-        except Exception:
+            (self.page if self.external else self.context).route('**/*', self._route)
+        except Exception as error:
             self.close()
+            if isinstance(error, PilotError):
+                raise
             raise PilotError('Could not launch the dedicated Chrome profile') from None
 
     def _route(self, route):
@@ -104,14 +118,15 @@ class BrowserReader:
             output.extend(self._collect_source(sub,'https://www.reddit.com/r/'+sub+'/new/'))
         if self.workflow and self.config.get('search_queries'):
             store=self.workflow.store
-            if time.time()-float(store.setting('search_last','0')) >= self.config.get('search_interval_seconds',1800):
-                cursor=int(store.setting('search_cursor','0'))
+            suffix=self.config.get('search_state_suffix','')
+            if time.time()-float(store.setting('search_last'+suffix,'0')) >= self.config.get('search_interval_seconds',1800):
+                cursor=int(store.setting('search_cursor'+suffix,'0'))
                 target=search_target(self.config,cursor)
                 if target:
                     sub,query,url=target
                     output.extend(self._collect_source(sub,url,query))
-                    store.set_setting('search_last',time.time())
-                    store.set_setting('search_cursor',cursor+1)
+                    store.set_setting('search_last'+suffix,time.time())
+                    store.set_setting('search_cursor'+suffix,cursor+1)
         return output
 
     def _collect_source(self, sub, url, query=''):
@@ -132,8 +147,14 @@ class BrowserReader:
                     if not self.config.get('browser_fallback', True) or not self.workflow:
                         raise PilotError('Reddit feed layout was not recognized')
                     from .agent_browser import agent_discover
-                    port = (self.profile/'DevToolsActivePort').read_text(encoding='utf-8-sig').splitlines()[0]
-                    records = agent_discover('http://127.0.0.1:'+port,self.page.url,self.root,self.config,self.workflow.store,pump=lambda:self.page.wait_for_timeout(100))
+                    cdp_url = getattr(self,'cdp_url',None)
+                    if not cdp_url:
+                        port = (self.profile/'DevToolsActivePort').read_text(encoding='utf-8-sig').splitlines()[0]
+                        cdp_url = 'http://127.0.0.1:'+port
+                    session=self.context.new_cdp_session(self.page)
+                    try: target_id=session.send('Target.getTargetInfo')['targetInfo']['targetId']
+                    finally: session.detach()
+                    records = agent_discover(cdp_url,self.page.url,self.root,self.config,self.workflow.store,pump=lambda:self.page.wait_for_timeout(100),target_id=target_id)
                     if not records or not normalize_records(records,sub,self.config):
                         raise PilotError('Browser agent returned no valid thread links on an unrecognized page')
                 pages += 1
@@ -298,7 +319,10 @@ class BrowserReader:
 
     def close(self):
         try:
-            if self.context:
+            if getattr(self,'external',False):
+                if getattr(self,'page',None):
+                    self.page.close()
+            elif self.context:
                 self.context.close()
         finally:
             if self.pw:

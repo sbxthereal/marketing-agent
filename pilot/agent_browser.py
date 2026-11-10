@@ -9,7 +9,7 @@ from .core import PilotError
 from .gateway import read_env, Gateway
 
 
-def agent_discover(cdp_url, url, root, config, store, pump=None):
+def agent_discover(cdp_url, url, root, config, store, pump=None, target_id=None):
     # Set before importing Browser Use. No cloud service or profile sync.
     os.environ['ANONYMIZED_TELEMETRY'] = 'false'
     os.environ['BROWSER_USE_LOGGING_LEVEL'] = 'error'
@@ -58,6 +58,9 @@ def agent_discover(cdp_url, url, root, config, store, pump=None):
                            max_completion_tokens=2500, dont_force_structured_output=True)
         browser = Browser(cdp_url=cdp_url, keep_alive=True, enable_default_extensions=False,
                           allowed_domains=['www.reddit.com','reddit.com','old.reddit.com'])
+        if target_id:
+            await browser.start()
+            browser.agent_focus_target_id=target_id
         tools = Tools(output_model=Feed)
         # Explicit allowlist: the recovery agent cannot click, type, send, use
         # JavaScript, access files, or follow a post's embedded instructions.

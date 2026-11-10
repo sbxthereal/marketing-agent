@@ -25,6 +25,15 @@ def company_address(value):
         return False
 
 
+def publisher_for(config, subreddit):
+    if config.get('browser_backend') == 'ixbrowser':
+        for profile in config.get('ixbrowser',{}).get('profiles',[]):
+            if subreddit.lower() in {s.lower() for s in profile['subreddits']}:
+                return profile['reddit_username']
+        return ''
+    return config.get('publishing',{}).get('reddit_username','')
+
+
 def utc_day():
     return dt.datetime.now(dt.timezone.utc).date().isoformat()
 
@@ -77,6 +86,8 @@ def load_config(root, filename='config.json'):
             raise PilotError('Invalid publishing setting: '+name)
     if pub.get('reddit_username') and not re.fullmatch(r'[A-Za-z0-9_-]{3,20}',pub['reddit_username']):
         raise PilotError('Invalid expected Reddit username')
+    from .ixbrowser import validate_profiles
+    validate_profiles(config)
     return config
 
 

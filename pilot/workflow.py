@@ -4,7 +4,7 @@ import json
 import time
 from urllib.parse import urlparse
 
-from .core import PilotError, reddit_url
+from .core import PilotError, publisher_for, reddit_url
 from .quality import similar_reply
 
 
@@ -24,7 +24,11 @@ def require_publishing(config):
     p = config.get('publishing', {})
     if config['source'] != 'browser' or p.get('enabled') is not True:
         raise PilotError('Browser publishing is not enabled')
-    if not p.get('reddit_username') or p.get('permission_confirmed') is not True or not p.get('permission_reference'):
+    identity = p.get('reddit_username')
+    if config.get('browser_backend') == 'ixbrowser':
+        profiles = config.get('ixbrowser',{}).get('profiles',[])
+        identity = profiles and all(profile.get('reddit_username') for profile in profiles)
+    if not identity or p.get('permission_confirmed') is not True or not p.get('permission_reference'):
         raise PilotError('Record the publishing permission and expected Reddit account first')
 
 
@@ -45,7 +49,7 @@ class Workflow:
             columns={r['name'] for r in c.execute('PRAGMA table_info(scans)')}
             if 'source' not in columns:c.execute("ALTER TABLE scans ADD COLUMN source TEXT NOT NULL DEFAULT 'new feed'")
             columns={r['name'] for r in c.execute('PRAGMA table_info(outbox)')}
-            for name,definition in [('subreddit',"TEXT NOT NULL DEFAULT ''"),('author_hash',"TEXT NOT NULL DEFAULT ''"),('submitted','REAL')]:
+            for name,definition in [('subreddit',"TEXT NOT NULL DEFAULT ''"),('author_hash',"TEXT NOT NULL DEFAULT ''"),('submitted','REAL'),('reddit_username',"TEXT NOT NULL DEFAULT ''")]:
                 if name not in columns:c.execute('ALTER TABLE outbox ADD COLUMN '+name+' '+definition)
             for row in c.execute("SELECT o.item_id,i.payload FROM outbox o JOIN items i ON i.id=o.item_id WHERE o.subreddit=''").fetchall():
                 post=json.loads(row['payload'])
@@ -144,7 +148,10 @@ class Workflow:
                     raise PilotError('Reply is too similar to a recent publication')
             now = time.time()
             post=json.loads(row['payload'])
-            c.execute('INSERT INTO outbox(item_id,draft_hash,draft,state,requested,updated,subreddit,author_hash) VALUES(?,?,?,?,?,?,?,?)', (item_id, expected_hash, draft, 'ready', now, now,post['subreddit'].lower(),self.author_key(post)))
+            publisher=publisher_for(config,post['subreddit'])
+            if not publisher:
+                raise PilotError('Select the expected Reddit account for this community before queuing')
+            c.execute('INSERT INTO outbox(item_id,draft_hash,draft,state,requested,updated,subreddit,author_hash,reddit_username) VALUES(?,?,?,?,?,?,?,?,?)', (item_id, expected_hash, draft, 'ready', now, now,post['subreddit'].lower(),self.author_key(post),publisher.lower()))
 
     def recover(self):
         # Never automatically repeat a send after a crash. Checking is read-only,
@@ -159,11 +166,13 @@ class Workflow:
         require_publishing(config)
         with self.store.db() as c:
             c.execute('BEGIN IMMEDIATE')
-            row=c.execute('SELECT o.*,i.status AS item_status,i.result FROM outbox o JOIN items i ON i.id=o.item_id WHERE item_id=?',(item_id,)).fetchone()
+            row=c.execute('SELECT o.*,i.status AS item_status,i.result,i.payload FROM outbox o JOIN items i ON i.id=o.item_id WHERE item_id=?',(item_id,)).fetchone()
             if not row or row['state']!='blocked' or row['item_status']!='approved' or row['draft_hash']!=expected_hash or not row['result'] or draft_hash(json.loads(row['result'])['draft'])!=expected_hash:
                 raise PilotError('Only a failed preflight with an unchanged approved draft can be retried')
             if time.time()-row['requested']>config['publishing'].get('approval_hours',24)*3600:
                 raise PilotError('Approval expired; review a fresh draft')
+            if not row['reddit_username'] or row['reddit_username'] != publisher_for(config,json.loads(row['payload'])['subreddit']).lower():
+                raise PilotError('Publishing account changed; restore the account recorded for this attempt')
             c.execute("UPDATE outbox SET state='ready',error=NULL,updated=? WHERE item_id=?",(time.time(),item_id))
 
     def claim_publication(self, config):
@@ -178,6 +187,9 @@ class Workflow:
                     c.execute("UPDATE outbox SET state='cancelled',error='Approval expired or draft changed',updated=? WHERE item_id=?", (now,row['item_id']))
                     continue
                 post=json.loads(row['payload'])
+                if not row['reddit_username'] or row['reddit_username'] != publisher_for(config,post['subreddit']).lower():
+                    c.execute("UPDATE outbox SET state='blocked',error='Publishing account changed; this attempt cannot be rerouted',updated=? WHERE item_id=?",(now,row['item_id']))
+                    continue
                 reason=self._wait_reason(c,post,config,now,row['item_id'])
                 if reason:
                     c.execute('UPDATE outbox SET error=? WHERE item_id=?',(reason,row['item_id']))
@@ -211,7 +223,7 @@ class Workflow:
 
     def outbox(self):
         with self.store.db() as c:
-            return [dict(r) for r in c.execute('SELECT item_id,draft_hash,state,permalink,error FROM outbox ORDER BY requested DESC LIMIT 200')]
+            return [dict(r) for r in c.execute('SELECT item_id,draft_hash,state,permalink,error,reddit_username FROM outbox ORDER BY requested DESC LIMIT 200')]
 
     def enrich(self, post):
         with self.store.db() as c:

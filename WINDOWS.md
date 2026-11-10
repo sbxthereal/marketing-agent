@@ -46,6 +46,32 @@ Sign in through the visible Chrome window, then press Enter in PowerShell. The l
 
 ## First supervised run
 
+### Optional ixBrowser profiles
+
+Use the installed ixBrowser desktop client and its [official local API](https://www.ixbrowser.com/doc/v2/local-api/en). The API must be enabled on loopback (default port 53200) and your ixBrowser account must have API access. Create/sign in to your own dedicated Reddit profiles in ixBrowser; this worker does not create accounts or copy cookies. Close unrelated tabs in these profiles.
+
+Add the following settings to `config.json`, replacing the example IDs/usernames and matching your approved community list:
+
+```json
+{
+  "browser_backend": "ixbrowser",
+  "subreddits": ["nocode", "webdev"],
+  "ixbrowser": {
+    "port": 53200,
+    "profiles": [
+      {"id": 1, "reddit_username": "your_first_account", "subreddits": ["nocode"]},
+      {"id": 2, "reddit_username": "your_second_account", "subreddits": ["webdev"]}
+    ]
+  }
+}
+```
+
+These are illustrative communities, not permission records. Assign each selected community to exactly one profile. One worker opens a separate managed tab in each profile, scans sequentially, and shares one SQLite queue, token budget, reply history and cooldown ledger. The limit remains three replies per day **across profiles**, not per profile. An account challenge pauses the worker; it never switches accounts to continue around a block. It does not change fingerprints, proxies, or profile settings. Closing the worker closes its managed tabs and disconnects while leaving the ixBrowser profiles open.
+
+Queued publication attempts are bound to their expected Reddit username. Changing assignments cannot reroute an existing attempt to another account. The review desk shows the configured reply account. Configure profiles before queuing replies. `pilot login` applies only to the built-in Chrome profile; sign in directly in ixBrowser instead. Headless settings apply only to built-in Chrome.
+
+### Run and inspect
+
 ```powershell
 .\.venv\Scripts\python.exe -X utf8 -m pilot doctor
 .\.venv\Scripts\python.exe -X utf8 -m pilot serve
