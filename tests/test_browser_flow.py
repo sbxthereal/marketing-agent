@@ -11,6 +11,7 @@ import unittest
 from pilot.browser import BrowserReader, BrowserAttention
 from pilot.core import Store, PilotError
 from pilot.workflow import Workflow, draft_hash
+from pilot.context import thread_context
 
 
 @unittest.skipUnless(os.environ.get('PILOT_BROWSER_TESTS')=='1' and importlib.util.find_spec('playwright'), 'Set PILOT_BROWSER_TESTS=1 in the browser environment')
@@ -30,7 +31,7 @@ class BrowserFlowTests(unittest.TestCase):
         self.store=Store(Path(self.tmp.name)/'state.db');self.flow=Workflow(self.store)
         self.config={'source':'browser','ai':'oneapi','subreddits':['pilottest'],'max_feed_pages':1,'lookback_hours':24,'browser_fallback':False,
           'publishing':{'enabled':True,'permission_confirmed':True,'permission_reference':'LOCAL ROUTED TEST ONLY','reddit_username':'pilot_test','min_interval_seconds':1,'max_per_day':3}}
-        self.submits=0;self.comments=[];self.username='pilot_test';self.locked=False;self.reject=False;self.search_visits=0
+        self.submits=0;self.comments=[];self.followups=[];self.username='pilot_test';self.locked=False;self.reject=False;self.search_visits=0
         self.post={'id':'t3_abc123','kind':'post','subreddit':'pilottest','url':'https://www.reddit.com/r/pilottest/comments/abc123/help/','title':'Need a portfolio website','body':'I need a website to showcase my design projects.'}
         self.context=self.browser.new_context();self.addCleanup(self.context.close)
         self.context.route('**/*',self.route)
@@ -39,10 +40,11 @@ class BrowserFlowTests(unittest.TestCase):
         self.reader.root=Path(self.tmp.name);self.reader.config=self.config;self.reader.workflow=self.flow;self.reader.page=self.page
 
     def page_html(self,feed=False):
-        post=f'<shreddit-post id="{self.post["id"]}" post-title="{self.post["title"]}" permalink="{self.post["url"]}" '+('is-locked' if self.locked else '')+f'><h1>{self.post["title"]}</h1><div slot="text-body">{self.post["body"]}</div></shreddit-post>'
+        post=f'<shreddit-post author="asker" id="{self.post["id"]}" post-title="{self.post["title"]}" permalink="{self.post["url"]}" '+('is-locked' if self.locked else '')+f'><h1>{self.post["title"]}</h1><div slot="text-body">{self.post["body"]}</div></shreddit-post>'
         if feed:
             return '<!doctype html><title>Local test feed</title>'+post+'<shreddit-post is-ad post-title="Advertisement" permalink="/r/pilottest/comments/ad123/ad/"></shreddit-post>'
         comments=''.join(f'<shreddit-comment author="pilot_test" thingid="t1_c123" permalink="{self.post["url"]}c123/"><div slot="comment">{html.escape(c)}</div></shreddit-comment>' for c in self.comments)
+        comments+=''.join(f'<shreddit-comment author="{author}"><div slot="comment">{html.escape(body)}</div></shreddit-comment>' for author,body in self.followups)
         return '''<!doctype html><style>shreddit-post,shreddit-comment,shreddit-composer{display:block} [contenteditable]{border:1px solid;height:60px}</style>'''+post+f'<div id="user-drawer-content"><a href="/user/{self.username}/">Profile</a></div>'+comments+'''
         <shreddit-composer style="display:none"><div contenteditable="true" role="textbox">WRONG HIDDEN EDITOR</div><button>Comment</button></shreddit-composer>
         <comment-composer-host><button data-testid="trigger-button" onclick="this.hidden=true;document.getElementById('real').style.display='block'">Join the conversation</button>
@@ -149,6 +151,19 @@ class BrowserFlowTests(unittest.TestCase):
         job=self.job();self.post['body']='Actually I no longer want any recommendations.'
         with self.assertRaisesRegex(PilotError,'changed'):self.reader.publish(job,self.flow)
         self.assertEqual(self.submits,0)
+
+    def test_new_author_requirement_blocks_approved_reply(self):
+        snapshot=thread_context({'author':'asker','body':self.post['body'],'comments':[]})
+        self.post.update(snapshot)
+        job=self.job();self.followups=[('asker','Solved already, no more recommendations.')]
+        with self.assertRaisesRegex(PilotError,'follow-up'):self.reader.publish(job,self.flow)
+        self.assertEqual(self.submits,0)
+
+    def test_unrelated_community_followup_does_not_change_author_snapshot(self):
+        self.post.update(thread_context({'author':'asker','body':self.post['body'],'comments':[]}))
+        job=self.job();self.followups=[('someone_else','I would like a native app myself.')]
+        self.assertTrue(self.reader.publish(job,self.flow).endswith('/c123/'))
+        self.assertEqual(self.submits,1)
 
     def test_rejected_submission_is_uncertain_and_cannot_retry(self):
         job=self.job();self.reject=True

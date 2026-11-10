@@ -1,6 +1,7 @@
 """Local reply checks; no extra model call for boilerplate or duplicates."""
 import re
 from difflib import SequenceMatcher
+from .context import original_text, discussion
 
 STOPWORDS = set('the and that this with from have your you for are can could would should want need which what how does do into about some just like more work medo'.split())
 
@@ -32,7 +33,7 @@ def concerns(draft, post):
         issues.append('Remove generic or sales language')
     if re.search(r'\b(guaranteed|unlimited|cheapest|100% secure|production.ready|i.ve used|i used|my clients|we use it)\b', body, re.I):
         issues.append('Unsupported guarantee or first-hand claim')
-    source = post['title']+' '+post['body'].split('[Existing replies, context only]')[0]
+    source = post['title']+' '+original_text(post) + ' ' + ' '.join(c['body'] for c in discussion(post) if c['role'] == 'op')
     for subject in ('app store','contact form'):
         if subject in body.lower() and subject not in source.lower():
             issues.append('Remove the unrequested '+subject+' aside')
@@ -49,7 +50,7 @@ def hold(result, reason):
 def context_skip(post, username=''):
     if username and post.get('author', '').lower() == username.lower():
         return 'Own account’s thread; no promotional reply'
-    replies = post['body'].partition('[Existing replies, context only]')[2]
+    replies = ' '.join(c['body'] for c in discussion(post))
     if re.search(r'\bmedo\b', replies, re.I):
         return 'MeDo is already mentioned in the visible discussion; avoid repeating the recommendation'
     return ''

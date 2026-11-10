@@ -59,6 +59,15 @@ class DiscoveryQualityTests(unittest.TestCase):
         self.assertTrue(context_skip(dict(self.post,body=self.post['body']+'\n[Existing replies, context only]\nTry MeDo.'),'marketer'))
         self.assertFalse(context_skip(self.post,'marketer'))
 
+    def test_existing_medo_reply_skips_before_any_model_call(self):
+        from unittest.mock import Mock
+        gateway, store = Mock(), Mock()
+        post = dict(self.post, discussion=[{'role': 'community', 'body': 'Try MeDo for that.'}])
+        result = analyze(gateway, post, [], {}, store)
+        self.assertEqual(result['decision'], 'skip')
+        gateway.chat.assert_not_called()
+        store.reserve.assert_not_called()
+
     def test_model_quality_failure_does_not_trigger_rewrite_spending(self):
         with tempfile.TemporaryDirectory() as tmp:
             store=Store(Path(tmp)/'test.db')
@@ -71,6 +80,20 @@ class DiscoveryQualityTests(unittest.TestCase):
             c={'model':'test','max_daily_calls':5,'max_daily_tokens':100000,'max_output_tokens':1000,'review_recommendations':False}
             result=analyze(gateway,self.post,cat,c,store)
             self.assertEqual(result['decision'],'review');self.assertEqual(result['draft'],'');self.assertEqual(gateway.calls,1)
+
+    def test_invented_claim_is_held_without_automatic_model_retry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store=Store(Path(tmp)/'test.db')
+            class Fake:
+                calls=0
+                def chat(inner,*args):
+                    inner.calls+=1
+                    return json.dumps(dict(decision='recommend',reason='Fit',template_id='builder',evidence='simple travel app',claim_ids=['invented'],draft=self.draft)),{'prompt_tokens':100,'completion_tokens':40},10
+            gateway=Fake();cat=[{'id':'builder','name':'MeDo','url':'https://medo.dev/','claims':{'generation':'Build apps'},'limitations':[]}]
+            c={'model':'test','max_daily_calls':5,'max_daily_tokens':100000,'max_output_tokens':1000}
+            result=analyze(gateway,self.post,cat,c,store)
+            self.assertEqual(result['decision'],'review');self.assertEqual(result['draft'],'')
+            self.assertEqual(gateway.calls,1);self.assertEqual(store.summary()['usage']['calls'],1)
 
     def test_recommendation_gets_one_metered_editor_call(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -85,6 +108,52 @@ class DiscoveryQualityTests(unittest.TestCase):
             result=analyze(gateway,self.post,cat,c,store)
             self.assertEqual(result['decision'],'recommend');self.assertEqual(gateway.calls,2)
             self.assertEqual(store.summary()['usage']['calls'],2)
+
+    def test_oneapi_serialized_draft_envelope_works_in_both_stages(self):
+        for wrapped_calls in ({1}, {2}, {1, 2}):
+            with self.subTest(wrapped_calls=wrapped_calls), tempfile.TemporaryDirectory() as tmp:
+                store=Store(Path(tmp)/'test.db')
+                raw=dict(decision='recommend',reason='Fit',template_id='builder',evidence='simple travel app',claim_ids=['generation'],draft=self.draft)
+                class Fake:
+                    calls=0
+                    def chat(inner,*args):
+                        inner.calls+=1
+                        value={'type':'json_object','draft':json.dumps(raw)} if inner.calls in wrapped_calls else raw
+                        return json.dumps(value),{'prompt_tokens':100,'completion_tokens':40},10
+                gateway=Fake();cat=[{'id':'builder','name':'MeDo','url':'https://medo.dev/','claims':{'generation':'Build apps'},'limitations':[]}]
+                config={'model':'test','max_daily_calls':2,'max_daily_tokens':100000,'max_output_tokens':1000}
+                result=analyze(gateway,self.post,cat,config,store)
+                self.assertEqual(result['decision'],'recommend')
+                self.assertEqual(result['draft'].count('I work on MeDo.'),1)
+                self.assertEqual(gateway.calls,2)  # no formatting-repair call
+
+    def test_wrapping_cannot_bypass_claim_evidence_or_link_validation(self):
+        for change in ({'claim_ids':['invented']}, {'evidence':'not in the original request'}, {'draft':self.draft+' https://example.com'}):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as tmp:
+                store=Store(Path(tmp)/'test.db')
+                raw=dict(decision='recommend',reason='Fit',template_id='builder',evidence='simple travel app',claim_ids=['generation'],draft=self.draft)
+                raw.update(change)
+                class Fake:
+                    calls=0
+                    def chat(inner,*args):
+                        inner.calls+=1
+                        return json.dumps({'type':'json_object','draft':json.dumps(raw)}),{'prompt_tokens':100,'completion_tokens':40},10
+                gateway=Fake();cat=[{'id':'builder','name':'MeDo','url':'https://medo.dev/','claims':{'generation':'Build apps'},'limitations':[]}]
+                config={'model':'test','max_daily_calls':2,'max_daily_tokens':100000,'max_output_tokens':1000}
+                result=analyze(gateway,self.post,cat,config,store)
+                self.assertEqual(result['decision'],'review');self.assertEqual(result['draft'],'')
+                self.assertEqual(gateway.calls,1)
+
+    def test_parser_does_not_override_outer_fields_or_unwrap_recursively(self):
+        from pilot.gateway import parse_recommendation
+        from pilot.core import validate_result, PilotError
+        inner={'decision':'recommend','reason':'Fit','template_id':'builder','evidence':'simple travel app','claim_ids':['generation'],'draft':self.draft}
+        cat=[{'id':'builder','name':'MeDo','url':'https://medo.dev/','claims':{'generation':'Build apps'},'limitations':[]}]
+        for outer in ({'type':'json_object','decision':'skip','draft':json.dumps(inner)},
+                      {'type':'unknown','draft':json.dumps(inner)},
+                      {'type':'json_object','draft':json.dumps({'type':'json_object','draft':json.dumps(inner)})}):
+            with self.subTest(outer=outer),self.assertRaises(PilotError):
+                validate_result(parse_recommendation(json.dumps(outer)),self.post,cat)
 
     def test_editor_budget_failure_cannot_release_unchecked_draft(self):
         with tempfile.TemporaryDirectory() as tmp:

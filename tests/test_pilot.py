@@ -119,12 +119,15 @@ class ModelTests(Base):
         with self.assertRaises(PilotError):
             validate_result(r, self.post, self.catalog)
 
-    def test_invalid_model_output_is_logged_and_rejected(self):
+    def test_invalid_model_output_is_logged_and_held_without_a_draft(self):
         class Fake:
             def chat(self, *args):
                 return '{bad', {'prompt_tokens': 11, 'completion_tokens': 3}, 10
-        with self.assertRaises(PilotError):
-            analyze(Fake(), self.post, self.catalog, self.config, self.store)
+        result = analyze(Fake(), self.post, self.catalog, self.config, self.store)
+        self.assertEqual(result['decision'], 'review')
+        self.assertEqual(result['draft'], '')
+        self.assertEqual(result['claim_ids'], [])
+        self.assertEqual(self.store.summary()['usage']['calls'], 1)
         self.assertEqual(self.store.summary()['usage']['budget_tokens'], 14)
 
     def test_budget_prevents_network_call(self):

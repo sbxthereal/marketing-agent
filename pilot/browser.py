@@ -8,6 +8,7 @@ from . import dom
 from .workflow import comment_permalink
 from .discovery import timestamp, search_target
 from .platform_support import chrome_options
+from .context import original_text, thread_context, op_followups_hash
 
 
 def normalize_records(records, subreddit, config):
@@ -164,7 +165,7 @@ class BrowserReader:
                     if not records or not normalize_records(records,sub,self.config):
                         raise PilotError('Browser agent returned no valid thread links on an unrecognized page')
                 pages += 1
-                boundary, unseen_on_page, consecutive_seen = False, 0, 0
+                boundary, unseen_on_page, consecutive_seen, new_on_page = False, 0, 0, 0
                 for rec in records:
                     if rec.get('sticky'):
                         continue
@@ -179,15 +180,17 @@ class BrowserReader:
                     if created and created < cutoff:
                         boundary = True
                         continue
+                    boundary = False  # A newer record after an old one invalidates that boundary.
                     if self.workflow and self.workflow.seen(post['id']):
                         duplicates += 1; consecutive_seen += 1
-                        if consecutive_seen >= 3 and previous_complete:
-                            boundary = True
                         continue
                     consecutive_seen = 0
+                    new_on_page += 1
                     post['discovery_source'] = 'search: '+query if query else 'new feed'
                     candidates[post['id']] = post
-                if boundary:
+                # A seen run in the middle of a batch is not a safe checkpoint.
+                # One extra bounded batch also catches a new tail after an old run.
+                if boundary or (previous_complete and consecutive_seen >= 3 and new_on_page == 0):
                     break
                 if index+1 == max_pages or (index > 0 and unseen_on_page == 0):
                     state = 'coverage_capped'
@@ -220,12 +223,7 @@ class BrowserReader:
             raise PilotError('Thread title could not be read')
         if data['id'] != post['id']:
             raise PilotError('Thread identity did not match its source URL')
-        comments = '\n\n'.join(c['body'][:1400] for c in data['comments'][:12])
-        # Bound tokens before calling the model; preserve the actual post first.
-        body = data['body'][:10000]
-        if comments:
-            body += '\n\n[Existing replies, context only]\n'+comments[:5000]
-        result = dict(post, title=data['title'][:1000],body=body,
+        result = dict(post, title=data['title'][:1000], **thread_context(data),
                       author=data.get('author') or post.get('author',''),posted_at=data.get('created') or post.get('posted_at',''))
         result['closed'] = bool(data['locked'] or data['archived'])
         return result
@@ -267,12 +265,14 @@ class BrowserReader:
             raise PilotError('Thread identity changed before publication')
         if current['locked'] or current['archived']:
             raise PilotError('Thread is locked or archived')
-        original_body = post['body'].split('[Existing replies, context only]')[0].strip()
+        original_body = original_text(post)
         if current['title'].strip() != post['title'].strip() or current['body'][:10000].strip() != original_body:
             raise PilotError('Original post changed since review; generate a fresh draft')
         existing = self._existing_comment(post,draft,username)
         if existing:
             return existing
+        if post.get('op_followups_hash') and post['op_followups_hash'] != op_followups_hash(current):
+            raise PilotError('The original author added or changed a follow-up; review a fresh draft before replying')
         # Recheck the live discussion even if the draft was approved hours ago.
         if current.get('author','').lower()==username.lower():
             raise PilotError('Own account’s thread; no promotional reply')

@@ -144,6 +144,23 @@ def validate_post(post, config):
     result = {k: post[k] for k in ('id', 'url', 'subreddit', 'title', 'body', 'kind')}
     for key,cap in [('author',30),('posted_at',50),('discovery_source',300)]:
         if isinstance(post.get(key),str): result[key]=post[key][:cap]
+    if 'original_body' in post:
+        if not isinstance(post['original_body'], str) or len(post['original_body']) > 10000:
+            raise PilotError('Invalid original post text')
+        result['original_body'] = post['original_body']
+    if 'discussion' in post:
+        comments = post['discussion']
+        if not isinstance(comments, list) or len(comments) > 14 or any(
+            not isinstance(c, dict) or set(c) != {'role', 'body'} or
+            c['role'] not in ('op', 'community') or not isinstance(c['body'], str) or len(c['body']) > 5000 for c in comments
+        ) or sum(len(c['body']) for c in comments) > 5000:
+            raise PilotError('Invalid discussion context')
+        result['discussion'] = comments
+    if 'op_followups_hash' in post:
+        value = post['op_followups_hash']
+        if not isinstance(value, str) or not re.fullmatch(r'[0-9a-f]{64}', value):
+            raise PilotError('Invalid follow-up snapshot')
+        result['op_followups_hash'] = value
     return result
 
 
@@ -161,9 +178,10 @@ def validate_result(result, post, catalog):
         if result['draft'] or result['template_id'] or result['claim_ids']:
             raise PilotError('Skipped/uncertain items must not contain a promotional draft')
         return result
+    from .context import original_text
     templates = {t['id']: t for t in catalog}
     template = templates.get(result['template_id'])
-    if not template or not result['evidence'] or result['evidence'] not in post['title'] + '\n' + post['body'].split('[Existing replies, context only]')[0]:
+    if not template or not result['evidence'] or result['evidence'] not in post['title'] + '\n' + original_text(post):
         raise PilotError('Missing exact evidence or unknown template')
     if not result['claim_ids'] or any(c not in template['claims'] for c in result['claim_ids']):
         raise PilotError('Unsupported template claim')
@@ -319,6 +337,7 @@ class Store:
                 payload['body'] = '[Expired]'
                 payload['title'] = '[Expired]'
                 payload['url'] = ''
-                payload.pop('author',None)
+                for key in ('author', 'original_body', 'discussion', 'op_followups_hash'):
+                    payload.pop(key, None)
                 c.execute("UPDATE items SET payload=?,result=NULL,publication_url=NULL,status='expired',error=NULL WHERE id=?", (json.dumps(payload), r['id']))
             c.execute('DELETE FROM calls WHERE created<?', (time.time() - 90 * 86400,))
