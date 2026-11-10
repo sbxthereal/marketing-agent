@@ -26,8 +26,8 @@ def company_address(value):
 
 
 def publisher_for(config, subreddit):
-    if config.get('browser_backend') == 'ixbrowser':
-        for profile in config.get('ixbrowser',{}).get('profiles',[]):
+    if config.get('browser_backend') in ('ixbrowser', 'aliasmode'):
+        for profile in config.get(config['browser_backend'],{}).get('profiles',[]):
             if subreddit.lower() in {s.lower() for s in profile['subreddits']}:
                 return profile['reddit_username']
         return ''

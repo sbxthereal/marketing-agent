@@ -31,7 +31,7 @@ class Worker:
 
     def ensure_browser(self):
         if not self.browser:
-            if self.config.get('browser_backend') == 'ixbrowser':
+            if self.config.get('browser_backend') in ('ixbrowser', 'aliasmode'):
                 from .ixbrowser import ProfilePool
                 self.browser = ProfilePool(self.root,self.config,self.catalog,self.flow)
             else:
@@ -100,7 +100,7 @@ class Worker:
                         post = validate_post(enriched,self.config)
                         self.flow.enrich(post)
                         skip=context_skip(post,self.config.get('publishing',{}).get('reddit_username',''))
-                        for profile in self.config.get('ixbrowser',{}).get('profiles',[]):
+                        for profile in self.config.get(self.config.get('browser_backend',''),{}).get('profiles',[]):
                             skip = skip or context_skip(post,profile['reddit_username'])
                         posted=timestamp(post.get('posted_at'))
                         if posted and time.time()-posted > max(self.config.get('lookback_hours',24),self.config.get('search_lookback_hours',72))*3600:

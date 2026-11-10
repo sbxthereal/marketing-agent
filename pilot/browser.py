@@ -57,17 +57,23 @@ class BrowserReader:
         from playwright.sync_api import sync_playwright
         self.pw = sync_playwright().start()
         self.profile = self.root / 'runtime' / 'chrome-profile'
-        self.external = self.config.get('browser_backend') == 'ixbrowser'
+        backend = self.config.get('browser_backend', 'chrome')
+        self.external = backend in ('ixbrowser', 'aliasmode')
         self.attached_browser = None
         try:
             if self.external:
-                from .ixbrowser import open_profile
-                self.cdp_url = open_profile(self.config['ixbrowser'].get('port',53200), self.config['ixbrowser_profile_id'])
+                if backend == 'aliasmode':
+                    from .aliasmode import open_profile
+                    default_port = 50400
+                else:
+                    from .ixbrowser import open_profile
+                    default_port = 53200
+                self.cdp_url = open_profile(self.config[backend].get('port',default_port), self.config[backend + '_profile_id'])
                 self.attached_browser = self.pw.chromium.connect_over_cdp(self.cdp_url)
                 self.context = self.attached_browser.contexts[0]
                 if any(p.url != 'about:blank' and urlparse(p.url).hostname not in
                        ('www.reddit.com','reddit.com','old.reddit.com') for p in self.context.pages):
-                    raise PilotError('Use a dedicated ixBrowser profile containing only Reddit tabs; close unrelated tabs before resuming')
+                    raise PilotError('Use a dedicated managed profile containing only Reddit tabs; close unrelated tabs before resuming')
                 self.page = self.context.new_page()
             else:
                 self.context = self.pw.chromium.launch_persistent_context(

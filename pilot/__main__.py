@@ -29,8 +29,8 @@ def main():
                 readiness=str(e)
             print(json.dumps({'python': sys.version.split()[0], 'platform':sys.platform,'source': config['source'], 'ai': config['ai'], 'model': config['model'], 'catalog_entries': len(catalog), 'gateway_key_configured': bool(env.get('ONEAPI_API_KEY')), 'playwright_installed': importlib.util.find_spec('playwright') is not None, 'browser_use_installed': importlib.util.find_spec('browser_use') is not None, 'chrome_installed': bool(chrome_executable()),'browser_headless':config.get('browser_headless',False), 'browser_readiness':readiness,'publishing_enabled':config.get('publishing',{}).get('enabled',False),'publishing_requires_explicit_review':True}, indent=2))
         elif args.command == 'login':
-            if config.get('browser_backend') == 'ixbrowser':
-                raise PilotError('Sign in directly through the selected ixBrowser profiles, then start the worker; pilot login is for its dedicated Chrome profile')
+            if config.get('browser_backend') in ('ixbrowser', 'aliasmode'):
+                raise PilotError('Sign in directly through the selected managed profiles, then start the worker; pilot login is for its dedicated Chrome profile')
             from playwright.sync_api import sync_playwright
             (root/'runtime').mkdir(exist_ok=True,mode=0o700)
             with WorkerLock(root/'runtime'/'worker.lock'):

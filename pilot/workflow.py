@@ -25,8 +25,8 @@ def require_publishing(config):
     if config['source'] != 'browser' or p.get('enabled') is not True:
         raise PilotError('Browser publishing is not enabled')
     identity = p.get('reddit_username')
-    if config.get('browser_backend') == 'ixbrowser':
-        profiles = config.get('ixbrowser',{}).get('profiles',[])
+    if config.get('browser_backend') in ('ixbrowser', 'aliasmode'):
+        profiles = config.get(config['browser_backend'],{}).get('profiles',[])
         identity = profiles and all(profile.get('reddit_username') for profile in profiles)
     if not identity or p.get('permission_confirmed') is not True or not p.get('permission_reference'):
         raise PilotError('Record the publishing permission and expected Reddit account first')

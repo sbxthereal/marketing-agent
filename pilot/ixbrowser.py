@@ -1,4 +1,4 @@
-"""Attach to explicitly selected local ixBrowser profiles; one shared worker ledger."""
+"""Local ixBrowser API and fixed profile routing shared with AliasMode."""
 import copy
 import json
 import re
@@ -10,35 +10,40 @@ from .core import PilotError, require_live_permission
 
 def validate_profiles(config):
     backend = config.get('browser_backend', 'chrome')
-    if backend not in ('chrome', 'ixbrowser'):
-        raise PilotError('browser_backend must be chrome or ixbrowser')
+    if backend not in ('chrome', 'ixbrowser', 'aliasmode'):
+        raise PilotError('browser_backend must be chrome, ixbrowser, or aliasmode')
     if backend == 'chrome':
         return
-    settings = config.get('ixbrowser', {})
-    port = settings.get('port', 53200)
+    settings = config.get(backend, {})
+    if not isinstance(settings, dict):
+        raise PilotError('Invalid managed browser settings')
+    label = 'AliasMode' if backend == 'aliasmode' else 'ixBrowser'
+    port = settings.get('port', 50400 if backend == 'aliasmode' else 53200)
     if type(port) is not int or not 1024 <= port <= 65535:
-        raise PilotError('Invalid ixBrowser local API port')
+        raise PilotError('Invalid ' + label + ' local API port')
     profiles = settings.get('profiles')
     if not isinstance(profiles, list) or not 1 <= len(profiles) <= 2:
-        raise PilotError('Select one or two existing ixBrowser profiles')
+        raise PilotError('Select one or two existing ' + label + ' profiles for the pilot')
     ids, communities, accounts = set(), set(), set()
     for profile in profiles:
         if not isinstance(profile, dict):
-            raise PilotError('Invalid ixBrowser profile')
+            raise PilotError('Invalid ' + label + ' profile')
         ident, username, subs = profile.get('id'), profile.get('reddit_username'), profile.get('subreddits')
-        if type(ident) is not int or ident < 1 or ident in ids:
-            raise PilotError('ixBrowser profile IDs must be positive and unique')
+        valid_id = (type(ident) is int and ident > 0) if backend == 'ixbrowser' else (
+            isinstance(ident, str) and re.fullmatch(r'[A-Za-z0-9_-]{1,100}', ident))
+        if not valid_id or ident in ids:
+            raise PilotError(label + ' profile IDs must be valid and unique')
         if not isinstance(username, str) or not re.fullmatch(r'[A-Za-z0-9_-]{3,20}', username) or username.lower() in accounts:
-            raise PilotError('Each ixBrowser profile needs its distinct expected Reddit username')
+            raise PilotError('Each ' + label + ' profile needs its distinct expected Reddit username')
         if not isinstance(subs, list) or not subs or any(not isinstance(s, str) for s in subs):
-            raise PilotError('Assign communities to each ixBrowser profile')
+            raise PilotError('Assign communities to each ' + label + ' profile')
         for sub in subs:
             if sub.lower() in communities:
-                raise PilotError('Assign each community to exactly one ixBrowser profile')
+                raise PilotError('Assign each community to exactly one ' + label + ' profile')
             communities.add(sub.lower())
         ids.add(ident); accounts.add(username.lower())
     if communities != {s.lower() for s in config['subreddits']}:
-        raise PilotError('ixBrowser assignments must exactly match the selected communities')
+        raise PilotError(label + ' assignments must exactly match the selected communities')
 
 
 def local_debug_address(value):
@@ -85,29 +90,31 @@ class ProfilePool:
         require_live_permission(config, catalog)
         validate_profiles(config)
         self.root, self.config, self.catalog, self.workflow = root, config, catalog, workflow
+        self.backend = config['browser_backend']
         self.readers = {}
-        self.assignments = {s.lower():p for p in config['ixbrowser']['profiles'] for s in p['subreddits']}
+        self.assignments = {s.lower():p for p in config[self.backend]['profiles'] for s in p['subreddits']}
 
     def _reader(self, profile):
         if profile['id'] not in self.readers:
             from .browser import BrowserReader
             child = copy.deepcopy(self.config)
             child['subreddits'] = profile['subreddits']
-            child['ixbrowser_profile_id'] = profile['id']
+            child[self.backend + '_profile_id'] = profile['id']
             child['publishing']['reddit_username'] = profile['reddit_username']
-            child['search_state_suffix'] = ':ix:' + str(profile['id'])
+            prefix = ':ix:' if self.backend == 'ixbrowser' else ':alias:'
+            child['search_state_suffix'] = prefix + str(profile['id'])
             self.readers[profile['id']] = BrowserReader(self.root, child, self.catalog, self.workflow)
         return self.readers[profile['id']]
 
     def _for_post(self, post):
         profile = self.assignments.get(post['subreddit'].lower())
         if not profile:
-            raise PilotError('No ixBrowser profile is assigned to this community')
+            raise PilotError('No managed browser profile is assigned to this community')
         return self._reader(profile)
 
     def collect(self):
         output = []
-        for profile in self.config['ixbrowser']['profiles']:
+        for profile in self.config[self.backend]['profiles']:
             output.extend(self._reader(profile).collect())
         return output
 
