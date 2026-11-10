@@ -97,6 +97,10 @@ Stopping during a send may leave an uncertain outcome. Reconciliation reads an e
 
 Stop the task, run `git pull --ff-only`, and rerun setup. Existing configuration is preserved. Keep the database containing deduplication and cooldown history. Do not copy a macOS virtual environment or Chrome profile to Windows; install and log in again. Stop the old worker before transferring its database, and use only one active installation per Reddit account.
 
-The review desk stays on loopback; access it through RDP without opening a public port.
+## Company network view
+
+The review desk stays at `http://127.0.0.1:8765/` inside the server. To share a **read-only** view with colleagues, set `network_dashboard_host` in `config.json` to the server's explicit RFC1918 IPv4 address and restart. The worker opens a second listener at `http://SERVER_PRIVATE_IP:8765/`; wildcard/public addresses are rejected. It accepts private IPv4 clients only, never includes a write token, and rejects every POST. Review, pause/resume, and publishing remain local to the server.
+
+Scope any Windows firewall/network rule to that private address, TCP 8765, and your actual company/VPN ranges. Do not add public port forwarding. Everyone allowed onto that view can see the captured public discussions, draft recommendations, and experiment metrics; the OneAPI key is never returned. Network routing and company access policies still apply.
 
 References: [Playwright requirements](https://playwright.dev/python/docs/intro), [uv installer](https://docs.astral.sh/uv/getting-started/installation/), [Windows task security contexts](https://learn.microsoft.com/en-us/windows/win32/taskschd/security-contexts-for-running-tasks), [restart settings](https://learn.microsoft.com/en-us/powershell/module/scheduledtasks/new-scheduledtasksettingsset).

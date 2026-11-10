@@ -1,6 +1,7 @@
 import contextlib
 import datetime as dt
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,16 @@ from urllib.parse import urlparse
 
 class PilotError(Exception):
     pass
+
+
+def company_address(value):
+    """Only explicit RFC1918 IPv4 addresses, never wildcard/public binds."""
+    try:
+        address = ipaddress.IPv4Address(value)
+        return any(address in ipaddress.IPv4Network(net) for net in
+                   ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))
+    except (ValueError, TypeError):
+        return False
 
 
 def utc_day():
@@ -26,6 +37,8 @@ def load_config(root, filename='config.json'):
     config = json.loads(path.read_text(encoding='utf-8-sig'))
     if config.get('source') not in ('demo', 'browser') or config.get('ai') not in ('fixture', 'oneapi'):
         raise PilotError('Invalid source or AI mode')
+    if config.get('network_dashboard_host') and not company_address(config['network_dashboard_host']):
+        raise PilotError('network_dashboard_host must be an explicit private IPv4 address')
     for name, low, high in [('poll_seconds', 60, 86400), ('port', 1024, 65535),
                             ('max_daily_calls', 1, 10000), ('max_daily_tokens', 1000, 10000000),
                             ('max_output_tokens', 200, 4000), ('max_attempts', 1, 5),

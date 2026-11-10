@@ -204,17 +204,36 @@ class IntegrationTests(Base):
         self.assertEqual(self.store.setting('paused'), '1')
         self.assertEqual(self.store.summary()['usage']['calls'], 3)
 
-    def start_server(self):
+    def start_server(self, read_only=False):
         with socket.socket() as s:
             s.bind(('127.0.0.1', 0))
             port = s.getsockname()[1]
         config = dict(self.config, port=port)
-        server = server_for(ROOT, config, self.store)
+        server = server_for(ROOT, config, self.store, read_only=read_only)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         self.addCleanup(server.server_close)
         self.addCleanup(server.shutdown)
         return 'http://127.0.0.1:' + str(port)
+
+    def test_network_dashboard_never_exposes_write_token_or_mutates(self):
+        origin = self.start_server(read_only=True)
+        with urllib.request.urlopen(origin) as response:
+            self.assertIn("const token='';", response.read().decode())
+        with urllib.request.urlopen(origin + '/api/status') as response:
+            self.assertTrue(json.load(response)['read_only_dashboard'])
+        for path in ('/api/control', '/api/review/test', '/api/publish/test', '/api/retry/test'):
+            request = urllib.request.Request(origin+path, data=b'{"action":"pause"}',
+                headers={'Content-Type':'application/json','Origin':origin,'X-Pilot-Token':''})
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                urllib.request.urlopen(request)
+            self.assertEqual(error.exception.code,403)
+        self.assertNotEqual(self.store.setting('paused'),'1')
+
+    def test_remote_write_server_and_public_binds_are_rejected(self):
+        for address, read_only in [('10.2.3.4',False),('0.0.0.0',True),('8.8.8.8',True)]:
+            with self.assertRaises(PilotError):
+                server_for(ROOT,self.config,self.store,bind_host=address,read_only=read_only)
 
     def test_local_api_requires_origin_and_token_to_mutate(self):
         origin = self.start_server()

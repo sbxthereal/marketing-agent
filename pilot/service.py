@@ -8,7 +8,7 @@ import threading
 import time
 from urllib.parse import unquote, urlparse
 
-from .core import PilotError, Store, load_catalog, load_config, require_live_permission, validate_post
+from .core import PilotError, Store, company_address, load_catalog, load_config, require_live_permission, validate_post
 from .gateway import Gateway, analyze, fixture_result
 from .workflow import Workflow, draft_hash, shortlist, require_publishing
 from .discovery import scan_delay, timestamp
@@ -165,12 +165,16 @@ class Worker:
                 self.browser.close()
 
 
-def server_for(root, config, store, worker=None):
+def server_for(root, config, store, worker=None, *, read_only=False, bind_host='127.0.0.1'):
+    if bind_host != '127.0.0.1' and (not read_only or not company_address(bind_host)):
+        raise PilotError('Network access is only available on the private read-only dashboard')
     flow = Workflow(store)
     token = secrets.token_urlsafe(32)
     nonce = secrets.token_urlsafe(24)
     port = config['port']
-    hosts = {'127.0.0.1:' + str(port), 'localhost:' + str(port)}
+    hosts = {bind_host + ':' + str(port)}
+    if bind_host == '127.0.0.1':
+        hosts.add('localhost:' + str(port))
     origins = {'http://' + h for h in hosts}
 
     class Handler(BaseHTTPRequestHandler):
@@ -192,22 +196,25 @@ def server_for(root, config, store, worker=None):
             self.wfile.write(body)
 
         def host_ok(self):
-            return self.headers.get('Host') in hosts
+            return self.headers.get('Host') in hosts and (not read_only or
+                self.client_address[0] == '127.0.0.1' or company_address(self.client_address[0]))
 
         def do_GET(self):
             if not self.host_ok():
                 return self.respond(403, {'error': 'Invalid host'})
             if self.path == '/':
-                html = (root / 'pilot' / 'dashboard.html').read_text(encoding='utf-8-sig').replace('__TOKEN__', token).replace('__NONCE__', nonce)
+                html = (root / 'pilot' / 'dashboard.html').read_text(encoding='utf-8-sig').replace('__TOKEN__', '' if read_only else token).replace('__NONCE__', nonce)
                 return self.respond(200, html, 'text/html')
             if self.path == '/api/status':
-                return self.respond(200, dict(store.summary(), source=config['source'], ai=config['ai'], model=config['model'], poll_seconds=config['poll_seconds'], max_daily_calls=config['max_daily_calls'], max_daily_tokens=config['max_daily_tokens'], publishing='reviewed browser' if config.get('publishing',{}).get('enabled') else 'disabled', validation_snapshot=config.get('validation_snapshot',False), catalog=config['catalog_file'], efficiency=flow.metrics(), pacing=flow.pacing(config),next_scan_at=store.setting('next_scan_at')))
+                return self.respond(200, dict(store.summary(), read_only_dashboard=read_only, source=config['source'], ai=config['ai'], model=config['model'], poll_seconds=config['poll_seconds'], max_daily_calls=config['max_daily_calls'], max_daily_tokens=config['max_daily_tokens'], publishing='reviewed browser' if config.get('publishing',{}).get('enabled') else 'disabled', validation_snapshot=config.get('validation_snapshot',False), catalog=config['catalog_file'], efficiency=flow.metrics(), pacing=flow.pacing(config),next_scan_at=store.setting('next_scan_at')))
             if self.path == '/api/items':
                 outbox = {r['item_id']:r for r in flow.outbox()}
                 return self.respond(200, [dict(r,draft_hash=draft_hash(r['result']['draft']) if r['result'] else '',publication=outbox.get(r['id'])) for r in store.items()])
             return self.respond(404, {'error': 'Not found'})
 
         def do_POST(self):
+            if read_only:
+                return self.respond(403, {'error': 'Read-only company dashboard; use the local server session to make changes'})
             if not self.host_ok() or self.headers.get('Origin') not in origins or not secrets.compare_digest(self.headers.get('X-Pilot-Token', ''), token):
                 return self.respond(403, {'error': 'Unauthorized local request'})
             if self.headers.get('Content-Type', '').split(';')[0] != 'application/json':
@@ -245,7 +252,7 @@ def server_for(root, config, store, worker=None):
             except (ValueError, PilotError, TypeError) as e:
                 return self.respond(400, {'error': str(e) if isinstance(e, PilotError) else 'Invalid request'})
 
-    return ThreadingHTTPServer(('127.0.0.1', port), Handler)
+    return ThreadingHTTPServer((bind_host, port), Handler)
 
 
 def serve(root):
@@ -259,6 +266,17 @@ def serve(root):
     store = Store(runtime / 'pilot.sqlite3')
     worker = Worker(root, config, catalog, store)
     server = server_for(root, config, store, worker)
+    network_server = None
+    try:
+        if config.get('network_dashboard_host'):
+            network_server = server_for(root, config, store, read_only=True,
+                                        bind_host=config['network_dashboard_host'])
+    except Exception:
+        server.server_close()
+        lock.close()
+        raise
+    if network_server:
+        threading.Thread(target=network_server.serve_forever, name='network-dashboard', daemon=True).start()
     thread = threading.Thread(target=worker.run, name='pilot-worker', daemon=True)
     thread.start()
 
@@ -272,6 +290,8 @@ def serve(root):
     if hasattr(signal,'SIGBREAK'):signal.signal(signal.SIGBREAK,shutdown)
     publishing='reviewed publication enabled' if config.get('publishing',{}).get('enabled') else 'publishing disabled'
     print('MeDo pilot ready: http://127.0.0.1:' + str(config['port']) + ' (' + config['source'] + '/' + config['ai'] + '; '+publishing+')', flush=True)
+    if network_server:
+        print('Company dashboard (read-only): http://' + config['network_dashboard_host'] + ':' + str(config['port']), flush=True)
     try:
         server.serve_forever(poll_interval=0.5)
     finally:
@@ -279,4 +299,7 @@ def serve(root):
         worker.wake.set()
         thread.join(timeout=70)
         server.server_close()
+        if network_server:
+            network_server.shutdown()
+            network_server.server_close()
         lock.close()
