@@ -100,6 +100,7 @@ class ProfilePool:
             child = copy.deepcopy(self.config)
             child['subreddits'] = profile['subreddits']
             child[self.backend + '_profile_id'] = profile['id']
+            child['browser_profile_label'] = profile.get('name') or self.backend + ' profile ' + str(profile['id'])
             child['publishing']['reddit_username'] = profile['reddit_username']
             prefix = ':ix:' if self.backend == 'ixbrowser' else ':alias:'
             child['search_state_suffix'] = prefix + str(profile['id'])
@@ -126,6 +127,14 @@ class ProfilePool:
 
     def verify_publication(self, job, url):
         return self._for_post(job['post']).verify_publication(job, url)
+
+    def verify_attention(self, attention):
+        if attention.get('backend') != self.backend:
+            raise PilotError('Browser backend changed; restore the original profile assignment')
+        profile = next((p for p in self.config[self.backend]['profiles'] if p['id'] == attention.get('profile_id')), None)
+        if not profile or profile['reddit_username'] != attention.get('expected_account'):
+            raise PilotError('Original browser profile/account is no longer configured')
+        return self._reader(profile).verify_attention(attention)
 
     def close(self):
         error = None

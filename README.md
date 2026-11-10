@@ -51,3 +51,15 @@ The browser tests intercept every request and use local test pages, so they neve
 The original synthetic demo remains available by copying `config.example.json` to `config.json`. It is clearly labelled and never silently substitutes for failed live discovery.
 
 Source modules: `browser.py` / `dom.py` handle page operations, `agent_browser.py` handles bounded recovery, `workflow.py` maintains the outbox and metrics, and `core.py` / `gateway.py` / `service.py` provide queueing, model calls and the review server. The interface binds only to 127.0.0.1 and checks origin and CSRF tokens on mutations.
+
+## CAPTCHA and browser attention
+
+A detected human-verification page (including HTTP 200 with the title “Prove your humanity”), login requirement, or access block pauses the Reddit worker. The dashboard shows a persistent alert naming the profile, source page, detection time and last check result. Keep the dashboard open to see updates (every 15 seconds); this is an in-page alert and tab-title badge, not a background push notification.
+
+1. Connect to the Windows server through Windows App/RDP. Solve the verification manually in the **same profile** and return to the recorded source page. A different computer/browser session cannot clear this alert.
+2. In the server browser, open `http://127.0.0.1:8765` and select **I solved it — check and resume**. The company-network dashboard displays the alert but has no write controls.
+3. The worker checks the existing page and configured account on its browser thread. It requires readable Reddit post content and the original profile/account assignment. An unresolved challenge, missing page, changed account, missing permission or uncertain publication keeps it paused. “Keep paused” cancels a pending resume.
+
+There is no CAPTCHA solver, challenge-clicking loop, external solving service, or account failover. Checking access does not publish, consume model calls, reload the challenge or resend blocked/uncertain replies. Successfully checked discovery can continue; a blocked publication preflight still needs explicit review/retry. Model work continues through Comate OneAPI.
+
+Alerts survive worker restarts. Managed browser challenge tabs are kept open on worker disconnect. If the browser/tab was closed, open the recorded source in that same server profile before checking again; ambiguous or missing tabs do not count as solved. The update does not enable live-collection permissions or publishing.

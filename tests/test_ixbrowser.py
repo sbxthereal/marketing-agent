@@ -69,9 +69,19 @@ class ProfileTests(unittest.TestCase):
     def test_closing_attached_reader_keeps_user_profile_open(self):
         reader=BrowserReader.__new__(BrowserReader)
         reader.external=True;reader.context=Mock();reader.page=Mock();reader.pw=Mock()
+        reader.page.is_closed.return_value=False
         context,page,pw=reader.context,reader.page,reader.pw
         reader.close()
         page.close.assert_called_once();context.close.assert_not_called();pw.stop.assert_called_once()
+
+    def test_challenge_tab_is_preserved_when_worker_disconnects(self):
+        reader=BrowserReader.__new__(BrowserReader)
+        reader.external=True;reader.context=Mock();reader.page=Mock();reader.pw=Mock()
+        reader.page.is_closed.return_value=False;reader.handoff_pending=True
+        context,page,pw=reader.context,reader.page,reader.pw
+        reader.close()
+        page.close.assert_not_called();context.close.assert_not_called();pw.stop.assert_called_once()
+        page.unroute.assert_called_once()
 
     def test_profile_pool_checks_permission_before_local_api_access(self):
         config=configuration();config['permissions']['browser_collection']=False

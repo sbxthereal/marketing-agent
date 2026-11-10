@@ -45,6 +45,17 @@ def normalize_records(records, subreddit, config):
 
 class BrowserAttention(PilotError):
     """Access/account/challenge error requiring a person rather than a retry."""
+    def __init__(self, message, details=None):
+        super().__init__(message)
+        self.details = details or {}
+
+
+def public_page_url(value):
+    """Do not put query strings, credentials, or fragments in dashboard alerts."""
+    u = urlparse(value)
+    if u.scheme == 'https' and u.hostname in ('reddit.com', 'www.reddit.com', 'old.reddit.com') and not u.username and not u.password:
+        return urlunparse(('https', u.hostname, u.path, '', '', ''))
+    return ''
 
 
 class BrowserReader:
@@ -100,15 +111,61 @@ class BrowserReader:
 
     def _guard(self, response=None):
         if response and response.status in (401,403,429):
-            raise BrowserAttention('Reddit access/rate limit needs attention; no bypass attempted')
+            self._attention('access', 'Reddit access/rate limit needs attention; no bypass attempted')
         body = self.page.locator('body').inner_text(timeout=12000)
+        title = self.page.title().lower()
+        has_posts = self.page.locator('shreddit-post,.thing.link,a[id^="search-post-title-"]').count() > 0
+        if ('prove your humanity' in title or 'verify you are human' in title or
+                (not has_posts and any(s in body.lower() for s in ('prove your humanity', 'complete the captcha', 'verify you are human', 'verify you’re human')))):
+            self._attention('captcha', 'Reddit human verification required. Solve it in this server browser, then check access.')
         if any(s in body.lower() for s in ("you've been blocked",'verify you are human','verify you’re human','unusual traffic','complete the captcha','blocked by network security',"you're doing that too much",'you’re doing that too much','looks like you’ve been doing that a lot')):
-            raise BrowserAttention('Reddit challenge or block detected')
+            self._attention('access', 'Reddit challenge or block detected')
         if '/login' in self.page.url:
-            raise BrowserAttention('Sign in through the dedicated browser before resuming')
+            self._attention('login', 'Sign in through the dedicated browser before resuming')
         return body
 
+    def _attention(self, kind, message):
+        backend = self.config.get('browser_backend', 'chrome')
+        ident = self.config.get(backend + '_profile_id', '')
+        details = {'kind': kind, 'backend': backend, 'profile_id': ident,
+                   'profile_label': self.config.get('browser_profile_label') or ('Dedicated Chrome profile' if backend == 'chrome' else backend + ' profile ' + str(ident)),
+                   'expected_account': self.config.get('publishing', {}).get('reddit_username', ''),
+                   'url': public_page_url(getattr(self, 'target_url', self.page.url))}
+        self.handoff_pending = True
+        raise BrowserAttention(message, details)
+
+    def verify_attention(self, attention):
+        backend = self.config.get('browser_backend', 'chrome')
+        if (attention.get('backend') != backend or attention.get('profile_id', '') != self.config.get(backend + '_profile_id', '') or
+                attention.get('expected_account', '') != self.config.get('publishing', {}).get('reddit_username', '')):
+            raise PilotError('Profile/account assignment changed; restore the original assignment before checking')
+        url = attention.get('url', '')
+        u = urlparse(url)
+        parts = u.path.split('/')
+        if (not public_page_url(url) or len(parts) < 3 or parts[1] != 'r' or
+                parts[2].lower() not in {s.lower() for s in self.config['subreddits']}):
+            raise PilotError('No approved source page is recorded; inspect the original browser session')
+        self.handoff_pending = True
+        # The human may have navigated back after solving. Never navigate, solve,
+        # reload a challenge, or open another account as part of this check.
+        if self.page.is_closed() or public_page_url(self.page.url) != url:
+            pages = [p for p in self.context.pages if public_page_url(p.url) == url]
+            if len(pages) != 1:
+                raise PilotError('Open the recorded source page in the same server profile, then check again')
+            self.page = pages[0]
+            if getattr(self, 'external', False):
+                self.page.route('**/*', self._route)
+        self.target_url = url
+        self._guard()
+        if not self.page.locator('shreddit-post,.thing.link,a[id^="search-post-title-"]').count():
+            raise PilotError('No readable Reddit posts yet. Complete verification and return to the recorded source page.')
+        expected = attention.get('expected_account')
+        if expected and self._account().lower() != expected.lower():
+            raise PilotError('The browser is signed into a different Reddit account')
+        self.handoff_pending = False
+
     def _goto(self, url):
+        self.target_url = url
         response = self.page.goto(url, wait_until='domcontentloaded', timeout=30000)
         return self._guard(response)
 
@@ -238,7 +295,7 @@ class BrowserReader:
                 names = self.page.evaluate(dom.ACCOUNT)
                 self.page.keyboard.press('Escape')
         if len(names) != 1:
-            raise BrowserAttention('Could not verify the logged-in Reddit account')
+            self._attention('account', 'Could not verify the logged-in Reddit account')
         return names[0]
 
     def _existing_comment(self, post, draft, username):
@@ -259,7 +316,7 @@ class BrowserReader:
         self._goto(post['url'])
         username = self._account()
         if username.lower() != self.config['publishing']['reddit_username'].lower():
-            raise BrowserAttention('Dedicated browser is signed into the wrong Reddit account')
+            self._attention('account', 'Dedicated browser is signed into the wrong Reddit account')
         current = self.page.evaluate(dom.THREAD)
         if current['id'] != post['id']:
             raise PilotError('Thread identity changed before publication')
@@ -326,8 +383,10 @@ class BrowserReader:
     def close(self):
         try:
             if getattr(self,'external',False):
-                if getattr(self,'page',None):
-                    self.page.close()
+                if getattr(self,'page',None) and not self.page.is_closed():
+                    self.page.unroute('**/*', self._route)
+                    if not getattr(self, 'handoff_pending', False):
+                        self.page.close()
             elif self.context:
                 self.context.close()
         finally:

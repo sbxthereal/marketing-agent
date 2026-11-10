@@ -275,6 +275,10 @@ class Store:
         with self.db() as c:
             c.execute("UPDATE items SET status='queued',attempts=MAX(0,attempts-1),lease_until=0,next_try=?,error='Daily budget reached' WHERE id=?", (time.time() + 3600, item_id))
 
+    def defer_attention(self, item_id):
+        with self.db() as c:
+            c.execute("UPDATE items SET status='queued',attempts=MAX(0,attempts-1),lease_until=0,next_try=0,error='Waiting for browser verification' WHERE id=? AND status='processing'", (item_id,))
+
     def reserve(self, item_id, model, tokens, config):
         with self.db() as c:
             c.execute('BEGIN IMMEDIATE')

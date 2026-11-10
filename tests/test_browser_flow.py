@@ -82,6 +82,66 @@ class BrowserFlowTests(unittest.TestCase):
         self.assertEqual(self.store.summary()['usage']['calls'],0)
         enriched=self.reader.enrich(first[0]);self.assertIn('showcase',enriched['body'])
 
+    def test_http_200_captcha_handoff_and_verified_resume_same_tab(self):
+        from pilot.service import Worker
+        from pilot.core import load_config
+        source = 'https://www.reddit.com/r/pilottest/new/'
+        solved = False
+        def challenge(route):
+            route.fulfill(status=200,content_type='text/html',body=self.page_html(True) if solved else
+                          '<!doctype html><title>Reddit - Prove your humanity</title><h1>Prove your humanity</h1><button>Verify</button>')
+        self.page.route(source,challenge)
+        config = load_config(Path(__file__).resolve().parents[1], 'config.example.json')
+        config.update(self.config)
+        config.update(publishing={'enabled':False},catalog_file='catalog.json')
+        config['permissions']={k:True for k in ('browser_collection','ai_processing','community_rules_reviewed')}
+        config['permissions']['reference']='LOCAL ROUTED FIXTURE ONLY'
+        catalog=[{'id':'test','name':'Test','url':'https://medo.dev/','verified':True,'claims':{'x':'Test'},'limitations':[]}]
+        (Path(self.tmp.name)/'catalog.json').write_text(json.dumps(catalog))
+        worker=Worker(Path(self.tmp.name),config,catalog,self.store)
+        self.reader.config=config
+        worker.browser=self.reader
+        worker.cycle()
+        alert=worker.attention.current()
+        self.assertEqual(alert['kind'],'captcha')
+        self.assertEqual(alert['url'],source)
+        self.assertEqual(self.store.setting('paused'),'1')
+        self.assertFalse(self.page.is_closed())
+        worker.attention.request_check(alert['id']); worker.cycle()
+        self.assertEqual(worker.attention.current()['state'],'blocked')
+        self.assertEqual(self.store.summary()['usage']['calls'],0)
+        # Simulate a person completing verification. No agent clicks the CAPTCHA.
+        solved=True; self.page.reload()
+        worker.attention.request_check(alert['id']); worker.cycle()
+        self.assertIsNone(worker.attention.current())
+        self.assertEqual(self.store.setting('paused'),'0')
+        self.assertIs(worker.browser.page,self.page)
+        self.assertEqual(self.submits,0)
+
+    def test_captcha_title_detected_with_empty_body_but_post_mention_is_not_captcha(self):
+        self.page.goto(self.post['url'])
+        self.page.set_content('<title>Reddit - Prove your humanity</title><body></body>')
+        with self.assertRaises(BrowserAttention) as error:self.reader._guard()
+        self.assertEqual(error.exception.details['kind'],'captcha')
+        self.page.set_content('<title>Normal discussion</title><shreddit-post><h1>My app says prove your humanity</h1></shreddit-post>')
+        self.reader._guard()
+
+    def test_blank_or_wrong_page_cannot_clear_captcha_and_closed_tab_can_reattach(self):
+        self.page.goto(self.post['url'])
+        self.page.set_content('<title>Reddit - Prove your humanity</title>')
+        with self.assertRaises(BrowserAttention) as error:self.reader._guard()
+        alert=error.exception.details
+        self.page.set_content('<title>Loading</title>')
+        with self.assertRaisesRegex(PilotError,'No readable'):self.reader.verify_attention(alert)
+        self.page.close()
+        replacement=self.context.new_page();replacement.goto(self.post['url'])
+        self.reader.context=self.context
+        self.reader.verify_attention(alert)
+        self.assertIs(self.reader.page,replacement)
+        with self.assertRaisesRegex(PilotError,'assignment changed'):
+            self.reader.verify_attention(dict(alert,profile_id='different'))
+        self.assertEqual(self.submits,0)
+
     def test_search_discovers_new_thread_without_repeating_feed_or_old_results(self):
         self.config.update(search_queries=['travel app'],max_search_pages=1,search_lookback_hours=72,search_interval_seconds=1800)
         first=self.reader.collect();second=self.reader.collect()

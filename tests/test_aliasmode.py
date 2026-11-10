@@ -80,6 +80,16 @@ class AliasModeTests(unittest.TestCase):
         with self.assertRaises(PilotError):
             ProfilePool(Path('.'),config,[{'verified':True}],object())
 
+    def test_attention_check_is_bound_to_original_profile_and_account(self):
+        pool=ProfilePool(Path('.'),configuration(),[{'verified':True}],object())
+        first,second=Mock(),Mock();pool.readers={'profile-one':first,'profile-two':second}
+        alert={'backend':'aliasmode','profile_id':'profile-one','expected_account':'medo_one'}
+        pool.verify_attention(alert)
+        first.verify_attention.assert_called_once_with(alert);second.verify_attention.assert_not_called()
+        for changes in ({'profile_id':'missing'},{'expected_account':'medo_two'},{'backend':'chrome'}):
+            with self.assertRaises(PilotError):pool.verify_attention(dict(alert,**changes))
+        second.verify_attention.assert_not_called()
+
     def test_documented_wire_protocol_and_http_200_errors(self):
         state = {'reply':{'code':0,'data':{'ws':{'puppeteer':'ws://127.0.0.1:54321/devtools/browser/fixture'}}},
                  'paths':[], 'redirect':False}

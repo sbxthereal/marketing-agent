@@ -14,6 +14,7 @@ from .workflow import Workflow, draft_hash, shortlist, require_publishing
 from .discovery import scan_delay, timestamp
 from .quality import context_skip, hold
 from .platform_support import WorkerLock
+from .attention import Attention
 
 
 class Worker:
@@ -26,6 +27,8 @@ class Worker:
         self.fixtures = json.loads((root / config['fixtures_file']).read_text(encoding='utf-8-sig')) if config['source'] == 'demo' else []
         self.flow = Workflow(store)
         self.flow.recover()
+        self.attention = Attention(store)
+        self.attention.recover()
         self.next_scan = 0
         self.idle_scans = 0
 
@@ -54,10 +57,38 @@ class Worker:
             self.flow.publication_failed(job['item_id'],message)
             self.store.set_setting('message',message)
             from .browser import BrowserAttention
+            if isinstance(e,BrowserAttention):
+                self.attention.record(e.details, message)
             if isinstance(e,BrowserAttention) or any(x['item_id']==job['item_id'] and x['state']=='uncertain' for x in self.flow.outbox()):
                 self.store.set_setting('paused','1')
 
     def cycle(self):
+        attention = self.attention.current()
+        if attention:
+            if attention['state'] == 'checking':
+                self.check_attention(attention)
+            return
+        from .browser import BrowserAttention
+        try:
+            self._cycle()
+        except BrowserAttention as error:
+            self.attention.record(error.details, str(error))
+
+    def check_attention(self, attention):
+        # Playwright is thread-affine. HTTP handlers only enqueue this check.
+        try:
+            require_live_permission(self.config, load_catalog(self.root, self.config))
+            self.ensure_browser()
+            self.browser.verify_attention(attention)
+            if self.attention.finish(attention['id'], attention['check_id']):
+                self.next_scan = 0
+                self.idle_scans = 0
+                self.wake.set()
+        except Exception as error:
+            message = str(error) if isinstance(error, PilotError) else 'Browser verification failed. Keep the original profile open and check again.'
+            self.attention.finish(attention['id'], attention['check_id'], message)
+
+    def _cycle(self):
         if self.store.setting('paused') == '1':
             return
         self.store.expire(self.config['retention_days'])
@@ -118,10 +149,11 @@ class Worker:
                 self.store.complete(post['id'], result)
                 self.store.set_setting('gateway_failures', '0')
             except PilotError as e:
-                self.store.fail(post['id'], str(e), self.config['max_attempts'])
                 from .browser import BrowserAttention
                 if isinstance(e,BrowserAttention):
+                    self.store.defer_attention(post['id'])
                     raise
+                self.store.fail(post['id'], str(e), self.config['max_attempts'])
                 if str(e).startswith('Gateway'):
                     failures = int(self.store.setting('gateway_failures', '0')) + 1
                     self.store.set_setting('gateway_failures', str(failures))
@@ -175,6 +207,7 @@ def server_for(root, config, store, worker=None, *, read_only=False, bind_host='
     if bind_host != '127.0.0.1' and (not read_only or not company_address(bind_host)):
         raise PilotError('Network access is only available on the private read-only dashboard')
     flow = Workflow(store)
+    attention = Attention(store)
     token = secrets.token_urlsafe(32)
     nonce = secrets.token_urlsafe(24)
     port = config['port']
@@ -212,7 +245,7 @@ def server_for(root, config, store, worker=None, *, read_only=False, bind_host='
                 html = (root / 'pilot' / 'dashboard.html').read_text(encoding='utf-8-sig').replace('__TOKEN__', '' if read_only else token).replace('__NONCE__', nonce)
                 return self.respond(200, html, 'text/html')
             if self.path == '/api/status':
-                return self.respond(200, dict(store.summary(), read_only_dashboard=read_only, source=config['source'], ai=config['ai'], model=config['model'], poll_seconds=config['poll_seconds'], max_daily_calls=config['max_daily_calls'], max_daily_tokens=config['max_daily_tokens'], publishing='reviewed browser' if config.get('publishing',{}).get('enabled') else 'disabled', validation_snapshot=config.get('validation_snapshot',False), catalog=config['catalog_file'], efficiency=flow.metrics(), pacing=flow.pacing(config),next_scan_at=store.setting('next_scan_at')))
+                return self.respond(200, dict(store.summary(), browser_attention=attention.current(), read_only_dashboard=read_only, source=config['source'], ai=config['ai'], model=config['model'], poll_seconds=config['poll_seconds'], max_daily_calls=config['max_daily_calls'], max_daily_tokens=config['max_daily_tokens'], publishing='reviewed browser' if config.get('publishing',{}).get('enabled') else 'disabled', validation_snapshot=config.get('validation_snapshot',False), catalog=config['catalog_file'], efficiency=flow.metrics(), pacing=flow.pacing(config),next_scan_at=store.setting('next_scan_at')))
             if self.path == '/api/items':
                 outbox = {r['item_id']:r for r in flow.outbox()}
                 return self.respond(200, [dict(r,reply_account=publisher_for(config,r['payload']['subreddit']),draft_hash=draft_hash(r['result']['draft']) if r['result'] else '',publication=outbox.get(r['id'])) for r in store.items()])
@@ -237,10 +270,17 @@ def server_for(root, config, store, worker=None, *, read_only=False, bind_host='
                         raise PilotError('Unknown action')
                     if payload['action'] == 'resume' and config['source'] == 'browser':
                         require_live_permission(config, load_catalog(root, config))
-                    store.set_setting('paused', '1' if payload['action'] == 'pause' else '0')
+                    if payload['action'] == 'pause':
+                        attention.pause()
+                    else:
+                        attention.resume()
                     if payload['action'] == 'resume':
                         store.set_setting('gateway_failures', '0')
                     store.set_setting('message', 'Paused by reviewer' if payload['action'] == 'pause' else 'Resumes on the next scheduled cycle')
+                elif self.path == '/api/attention/check':
+                    if not worker:
+                        raise PilotError('Worker is unavailable; no browser check was started')
+                    attention.request_check(payload.get('id'))
                 elif self.path.startswith('/api/review/'):
                     item_id = unquote(self.path[len('/api/review/'):])
                     store.review(item_id, payload.get('action'), payload.get('publication_url', ''), config['subreddits'])
