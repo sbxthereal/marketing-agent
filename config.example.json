@@ -1,0 +1,17 @@
+{
+  "source": "demo",
+  "ai": "fixture",
+  "model": "DeepSeek-V4.1-Flash",
+  "poll_seconds": 300,
+  "port": 8765,
+  "max_daily_calls": 50,
+  "max_daily_tokens": 100000,
+  "max_output_tokens": 1200,
+  "max_attempts": 3,
+  "max_items_per_cycle": 5,
+  "retention_days": 7,
+  "subreddits": [],
+  "catalog_file": "catalog.demo.json",
+  "fixtures_file": "examples/posts.json",
+  "permissions": {"browser_collection": false, "ai_processing": false, "community_rules_reviewed": false, "reference": ""}
+}

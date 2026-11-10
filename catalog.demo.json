@@ -1,0 +1,4 @@
+[
+  {"id":"portfolio", "name":"DEMO portfolio template", "url":"https://demo.invalid/portfolio", "demo":true, "verified":false, "claims":{"pages":"Portfolio pages for presenting projects", "contact":"A contact form"}, "limitations":["No payments", "No appointment scheduling"]},
+  {"id":"booking", "name":"DEMO appointment template", "url":"https://demo.invalid/booking", "demo":true, "verified":false, "claims":{"slots":"Appointment slot selection", "calendar":"A simple appointment calendar"}, "limitations":["No payment processing", "No medical records", "No guaranteed regulatory compliance"]}
+]

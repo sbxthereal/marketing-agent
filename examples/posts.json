@@ -1,0 +1,6 @@
+[
+  {"id":"demo-portfolio", "subreddit":"demo", "kind":"post", "url":"https://demo.invalid/posts/portfolio", "title":"A portfolio for my design projects", "body":"I want a simple portfolio website to show my projects and let clients contact me. I cannot code.", "expected":"recommend", "template":"portfolio", "evidence":"a simple portfolio website", "claim":"pages"},
+  {"id":"demo-booking", "subreddit":"demo", "kind":"post", "url":"https://demo.invalid/posts/booking", "title":"Booking page for guitar lessons", "body":"I teach guitar. I need a page where students choose an available lesson slot. I collect payment in person.", "expected":"recommend", "template":"booking", "evidence":"students choose an available lesson slot", "claim":"slots"},
+  {"id":"demo-no-match", "subreddit":"demo", "kind":"comment", "url":"https://demo.invalid/posts/no-match", "title":"Hospital software", "body":"We need certified patient-record storage and insurance billing. Compliance is mandatory.", "expected":"skip"},
+  {"id":"demo-no-promo", "subreddit":"demo", "kind":"post", "url":"https://demo.invalid/posts/no-promo", "title":"Portfolio ideas", "body":"I need a portfolio but please do not suggest commercial products or promote your own company.", "expected":"skip"}
+]

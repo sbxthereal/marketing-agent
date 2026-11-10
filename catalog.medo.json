@@ -1,0 +1,39 @@
+[
+  {
+    "id": "medo-app-builder",
+    "name": "MeDo app builder",
+    "url": "https://medo.dev/",
+    "verified": true,
+    "verification": "Official capability documentation read 2026-11-09; this verifies documented capabilities, not a specific generated app.",
+    "source": "https://medo.dev/skill.md",
+    "keywords": ["app", "website", "database", "client portal", "no code", "nocode", "prototype"],
+    "claims": {
+      "generation": "Can generate a web or mobile product from a plain-language request.",
+      "backend": "Generated apps can include user accounts, permissions, backend logic and a connected database when requested.",
+      "iteration": "Apps can be refined through conversation and published to a shareable MeDo URL."
+    },
+    "limitations": ["Generation requires sign-in.", "Do not promise prices, credits, third-party integrations, local model hosting or native app-store packaging.", "Generated apps need functional and security testing; do not guarantee production readiness or multi-tenant isolation.", "This is an app builder, not a verified replacement for Zapier/n8n workflow execution and monitoring."]
+  },
+  {
+    "id": "portfolio-starting-point",
+    "name": "Portfolio Website Design example",
+    "url": "https://medo.dev/apps/app-d12uz73wkkch",
+    "verified": true,
+    "verification": "Official showcase listing and destination checked 2026-11-09; not functionally tested.",
+    "source": "https://medo.dev/",
+    "keywords": ["portfolio", "designer", "projects", "showcase"],
+    "claims": {"starting_point":"MeDo lists a portfolio website example featuring project showcases; it can be considered as a starting point."},
+    "limitations": ["The link opens an example/template page, not a verified live application.", "Do not promise working contact forms, checkout, hosting terms or other untested functions."]
+  },
+  {
+    "id": "waitlist-starting-point",
+    "name": "Vinyl-style waitlist website example",
+    "url": "https://medo.dev/apps/app-d4xlqv92qkg1",
+    "verified": true,
+    "verification": "Official showcase listing and destination checked 2026-11-09; not functionally tested.",
+    "source": "https://medo.dev/",
+    "keywords": ["waitlist", "landing", "launch", "email signup"],
+    "claims": {"starting_point":"MeDo lists a waitlist website example; it can be considered as a starting point for a launch page."},
+    "limitations": ["The link is an example/template page; email delivery, storage and consent handling have not been tested.", "Do not imply the example is ready for production unchanged."]
+  }
+]

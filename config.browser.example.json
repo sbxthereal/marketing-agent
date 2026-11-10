@@ -1,0 +1,54 @@
+{
+  "source": "browser",
+  "ai": "oneapi",
+  "model": "DeepSeek-V4.1-Flash",
+  "browser_model": "DeepSeek-V4.1-Flash",
+  "browser_fallback": true,
+  "browser_max_steps": 4,
+  "poll_seconds": 300,
+  "lookback_hours": 24,
+  "max_feed_pages": 3,
+  "port": 8765,
+  "max_daily_calls": 100,
+  "max_daily_tokens": 150000,
+  "max_output_tokens": 1200,
+  "max_attempts": 3,
+  "max_items_per_cycle": 5,
+  "retention_days": 7,
+  "subreddits": [
+    "nocode"
+  ],
+  "catalog_file": "catalog.medo.json",
+  "fixtures_file": "examples/posts.json",
+  "permissions": {
+    "browser_collection": false,
+    "ai_processing": false,
+    "community_rules_reviewed": false,
+    "reference": ""
+  },
+  "publishing": {
+    "enabled": false,
+    "reddit_username": "",
+    "permission_confirmed": false,
+    "permission_reference": "",
+    "max_per_day": 3,
+    "min_interval_seconds": 7200,
+    "approval_hours": 24,
+    "max_per_subreddit_day": 2,
+    "subreddit_interval_seconds": 21600,
+    "author_cooldown_hours": 168
+  },
+  "search_queries": [
+    "(build OR create) AND (app OR website) AND (help OR beginner OR recommend)",
+    "\"client portal\" OR \"booking app\" OR \"internal tool\"",
+    "\"portfolio\" OR \"waitlist\" OR \"landing page\""
+  ],
+  "search_interval_seconds": 1800,
+  "search_lookback_hours": 72,
+  "max_search_pages": 2,
+  "max_idle_poll_seconds": 1800,
+  "reply_quality_checks": true,
+  "review_model": "DeepSeek-V4.1-Flash",
+  "review_recommendations": true,
+  "browser_headless": false
+}
