@@ -50,7 +50,7 @@ class Workflow:
             columns={r['name'] for r in c.execute('PRAGMA table_info(scans)')}
             if 'source' not in columns:c.execute("ALTER TABLE scans ADD COLUMN source TEXT NOT NULL DEFAULT 'new feed'")
             columns={r['name'] for r in c.execute('PRAGMA table_info(outbox)')}
-            for name,definition in [('subreddit',"TEXT NOT NULL DEFAULT ''"),('author_hash',"TEXT NOT NULL DEFAULT ''"),('submitted','REAL'),('reddit_username',"TEXT NOT NULL DEFAULT ''")]:
+            for name,definition in [('subreddit',"TEXT NOT NULL DEFAULT ''"),('author_hash',"TEXT NOT NULL DEFAULT ''"),('submitted','REAL'),('reddit_username',"TEXT NOT NULL DEFAULT ''"),('approval_source',"TEXT NOT NULL DEFAULT 'manual'")]:
                 if name not in columns:c.execute('ALTER TABLE outbox ADD COLUMN '+name+' '+definition)
             for row in c.execute("SELECT o.item_id,i.payload FROM outbox o JOIN items i ON i.id=o.item_id WHERE o.subreddit=''").fetchall():
                 post=json.loads(row['payload'])
@@ -128,16 +128,21 @@ class Workflow:
                 'max_per_subreddit_day':pub.get('max_per_subreddit_day',2),'subreddit_interval_seconds':pub.get('subreddit_interval_seconds',21600),
                 'next_global_at':next_at if next_at>now else None}
 
-    def request_publish(self, item_id, expected_hash, config):
+    def request_publish(self, item_id, expected_hash, config, *, automatic=False):
         require_publishing(config)
         with self.store.db() as c:
             c.execute('BEGIN IMMEDIATE')
             row = c.execute('SELECT * FROM items WHERE id=?', (item_id,)).fetchone()
-            if not row or row['status'] != 'approved' or not row['result']:
+            if not row or row['status'] != ('review' if automatic else 'approved') or not row['result']:
                 raise PilotError('Only approved drafts can be queued for publication')
             result = json.loads(row['result'])
             draft = result['draft']
             post = json.loads(row['payload'])
+            if automatic:
+                from .automation import require_checked
+                if c.execute("SELECT 1 FROM settings WHERE key='paused' AND value='1'").fetchone():
+                    raise PilotError('Worker is paused; automatic publication was not queued')
+                require_checked(c, item_id, post, result, config)
             if is_campaign(post): require_post_policy(post,config)
             if not expected_hash or draft_hash(publication_text(result)) != expected_hash:
                 raise PilotError('The draft changed; refresh and review it again')
@@ -155,7 +160,9 @@ class Workflow:
             publisher=publisher_for(config,post['subreddit'])
             if not publisher:
                 raise PilotError('Select the expected Reddit account for this community before queuing')
-            c.execute('INSERT INTO outbox(item_id,draft_hash,draft,state,requested,updated,subreddit,author_hash,reddit_username) VALUES(?,?,?,?,?,?,?,?,?)', (item_id, expected_hash, draft, 'ready', now, now,post['subreddit'].lower(),self.author_key(post),publisher.lower()))
+            c.execute('INSERT INTO outbox(item_id,draft_hash,draft,state,requested,updated,subreddit,author_hash,reddit_username,approval_source) VALUES(?,?,?,?,?,?,?,?,?,?)', (item_id, expected_hash, draft, 'ready', now, now,post['subreddit'].lower(),self.author_key(post),publisher.lower(),'automatic' if automatic else 'manual'))
+            if automatic:
+                c.execute("UPDATE items SET status='approved',error=NULL WHERE id=?", (item_id,))
 
     def recover(self):
         # Never automatically repeat a send after a crash. Checking is read-only,
@@ -191,6 +198,12 @@ class Workflow:
                     c.execute("UPDATE outbox SET state='cancelled',error='Approval expired or draft changed',updated=? WHERE item_id=?", (now,row['item_id']))
                     continue
                 post=json.loads(row['payload'])
+                if row['approval_source'] == 'automatic':
+                    from .automation import require_checked
+                    try: require_checked(c, row['item_id'], post, json.loads(row['result']), config)
+                    except PilotError as error:
+                        c.execute("UPDATE outbox SET state='blocked',error=?,updated=? WHERE item_id=?",(str(error),now,row['item_id']))
+                        continue
                 if not row['reddit_username'] or row['reddit_username'] != publisher_for(config,post['subreddit']).lower():
                     c.execute("UPDATE outbox SET state='blocked',error='Publishing account changed; this attempt cannot be rerouted',updated=? WHERE item_id=?",(now,row['item_id']))
                     continue
@@ -210,11 +223,16 @@ class Workflow:
     def mark_submitting(self, item_id, config=None):
         with self.store.db() as c:
             c.execute('BEGIN IMMEDIATE')
-            row = c.execute('SELECT o.state,i.status,i.result,i.payload,o.draft_hash FROM outbox o JOIN items i ON i.id=o.item_id WHERE item_id=?', (item_id,)).fetchone()
+            row = c.execute('SELECT o.state,i.status,i.result,i.payload,o.draft_hash,o.approval_source FROM outbox o JOIN items i ON i.id=o.item_id WHERE item_id=?', (item_id,)).fetchone()
             if self.store.setting('paused') == '1' or not row or row['state'] != 'checking' or row['status'] != 'approved' or not row['result'] or draft_hash(publication_text(json.loads(row['result']))) != row['draft_hash']:
                 raise PilotError('Publication cancelled before submission')
+            if row['approval_source'] == 'automatic' and not config:
+                raise PilotError('Automatic submission requires the current configuration')
             if config:
                 post=json.loads(row['payload'])
+                if row['approval_source'] == 'automatic':
+                    from .automation import require_checked
+                    require_checked(c, item_id, post, json.loads(row['result']), config)
                 if is_campaign(post): require_post_policy(post,config)
                 reason=self._wait_reason(c,json.loads(row['payload']),config,time.time(),item_id)
                 if reason:raise PilotError(reason)
@@ -235,7 +253,7 @@ class Workflow:
 
     def outbox(self):
         with self.store.db() as c:
-            return [dict(r) for r in c.execute('SELECT item_id,draft_hash,state,permalink,error,reddit_username FROM outbox ORDER BY requested DESC LIMIT 200')]
+            return [dict(r) for r in c.execute('SELECT item_id,draft_hash,state,permalink,error,reddit_username,approval_source FROM outbox ORDER BY requested DESC LIMIT 200')]
 
     def enrich(self, post):
         with self.store.db() as c:

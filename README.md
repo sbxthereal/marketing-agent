@@ -1,6 +1,6 @@
 # MeDo Reddit pilot
 
-A local Windows/macOS worker for **new-post discovery → thread reading → MeDo matching and drafting → human review → browser publication → verified comment link**.
+A local Windows/macOS worker for **new-post discovery → thread reading → MeDo matching and drafting → OneAPI quality check → browser publication → verified source link**.
 
 The deployed worker does not use Codex, ChatGPT, this chat, or desktop computer-use tools. Playwright runs on the server; all runtime AI calls (Browser Use fallback, qualification/drafting, and final reply editing) go through the configured Comate OneAPI gateway. OneAPI is the provider; `model`, `browser_model`, and `review_model` select the actual models. The defaults use DeepSeek-V4.1-Flash.
 
@@ -18,7 +18,9 @@ The deployed worker does not use Codex, ChatGPT, this chat, or desktop computer-
 
 ## Publication behavior
 
-Approve a draft, then choose **Publish approved reply**. Approval alone never sends. The worker verifies the account, source thread, unchanged original post, approved text, and visible top-level editor. It records a submission marker before clicking. A comment counts as verified only after its exact words and expected author are read back from a matching comment permalink; browser whitespace differences are normalized.
+Automatic mode handles qualified replies and scheduled MeDo posts without per-post human approval. It uses a second OneAPI quality check, local validation, and the existing shared publication limits. See [AUTOMATIC.md](AUTOMATIC.md) for configuration and remaining live prerequisites.
+
+In manual mode, approve a draft, then choose **Publish approved reply**. Approval alone never sends. The worker verifies the account, source thread, unchanged original post, approved text, and visible top-level editor. It records a submission marker before clicking. A comment counts as verified only after its exact words and expected author are read back from a matching comment permalink; browser whitespace differences are normalized.
 
 An interrupted or ambiguous submission is held as `uncertain` and never automatically retried. A failed preflight can be retried explicitly from the review screen. To reconcile an uncertain attempt, stop the worker and run:
 
@@ -36,7 +38,7 @@ Replies aim for 40–65 words, recommend MeDo in the opening sentence, reference
 
 ## Scope
 
-This release handles top-level replies and a separate queue for reviewed standalone text posts in selected communities. It does not claim to find all Reddit conversations, monitor every new comment, or measure registrations without a connected attribution system. In r/nocode, product launches belong in the designated monthly launch thread; standalone promotional posting remains blocked unless community-specific permission is recorded. A permitted launch-thread comment is not permission for a standalone post.
+This release handles top-level replies and a separate queue for standalone text posts in selected communities. It does not claim to find all Reddit conversations, monitor every new comment, or measure registrations without a connected attribution system. In r/nocode, product launches belong in the designated monthly launch thread; standalone promotional posting remains blocked unless community-specific permission is recorded. A permitted launch-thread comment is not permission for a standalone post.
 
 The catalog contains documented MeDo capabilities and two official showcase starting points. `verified` means the cited source was checked; the showcase apps have not been functionally certified. Drafts must preserve those limitations.
 
@@ -68,7 +70,7 @@ Alerts survive worker restarts. Managed browser challenge tabs are kept open on 
 
 The dashboard separates **Replies** from **MeDo posts**. On the server-local dashboard, choose a configured community, a tutorial/template/build-note format, and a specific brief. An explicitly queued brief gets two metered Comate OneAPI calls: drafting, then an independent claim/style edit. This queue can draft while browser discovery is paused; it never needs to open Reddit. Malformed or unsupported copy is held, and missing editor budget never releases an unchecked draft. Gateway failures stay on the affected brief.
 
-The review shows the proposed title and body. Affiliation is added by code; a catalog link is included only when the recorded rules permit links. Title and body are bound together in the approval hash. Approval and **Publish approved post** remain separate actions. Replies and posts use the same outbox, global/community cooldowns, duplicate checks and uncertainty handling. The company-network dashboard remains read-only.
+The review shows the proposed title and body. Affiliation is added by code; a catalog link is included only when the recorded rules permit links. Title and body are bound together in the approval hash. In manual mode, approval and **Publish approved post** remain separate actions. In automatic mode, passing drafts enter the shared outbox directly. Replies and posts use the same outbox, global/community cooldowns, duplicate checks and uncertainty handling. The company-network dashboard remains read-only.
 
 A new post can be drafted before rules are recorded, but cannot be queued for publication without a matching community policy in `config.json`. After a policy changes, create a fresh draft and review it again. Policy keys are lowercase configured community names. Each policy needs `standalone_posts: true`, `links_allowed: true/false`, a nonempty `reference` and `notes`, and `reviewed_at` as a Unix timestamp from a real review within 30 days. No community permission is enabled by default, and adding a policy does not override the existing platform/account permission gates.
 

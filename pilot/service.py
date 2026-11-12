@@ -16,6 +16,7 @@ from .quality import context_skip, hold
 from .platform_support import WorkerLock
 from .attention import Attention
 from .campaigns import analyze_campaign, create_campaign, is_campaign, publication_text, policy, require_post_policy
+from .automation import Automation, automatic, require_checked
 
 
 class Worker:
@@ -30,6 +31,7 @@ class Worker:
         self.flow.recover()
         self.attention = Attention(store)
         self.attention.recover()
+        self.automation = Automation(store, self.flow, config, catalog)
         self.next_scan = 0
         self.idle_scans = 0
 
@@ -64,6 +66,7 @@ class Worker:
                 self.store.set_setting('paused','1')
 
     def cycle(self):
+        self.automation.schedule()
         self.draft_campaigns()
         attention = self.attention.current()
         if attention:
@@ -90,7 +93,10 @@ class Worker:
             try:
                 if not self.gateway:
                     self.gateway = Gateway(self.root / '.env')
-                result = analyze_campaign(self.gateway,post,shortlist(post,self.catalog),self.config,self.store)
+                catalog = shortlist(post,self.catalog)
+                if post.get('planned_template_id'):
+                    catalog = [t for t in self.catalog if t['id'] == post['planned_template_id']]
+                result = analyze_campaign(self.gateway,post,catalog,self.config,self.store)
                 if result is None:
                     self.store.defer_budget(post['id'])
                     break
@@ -122,6 +128,7 @@ class Worker:
             return
         self.store.expire(self.config['retention_days'])
         self.flow.expire(self.config['retention_days'])
+        self.automation.queue_ready()
         self.publish_ready()
         if self.store.setting('paused') == '1':
             return
@@ -191,6 +198,9 @@ class Worker:
                         self.store.set_setting('message', 'Gateway access, quota, or repeated connection failure. Check connectivity and credentials before resuming.')
                         break
         self.store.set_setting('last_cycle', str(int(time.time())))
+        self.automation.queue_ready()
+        if automatic(self.config) and self.store.setting('paused') != '1':
+            self.publish_ready()
 
     def run(self):
         failures = 0
@@ -236,6 +246,7 @@ def server_for(root, config, store, worker=None, *, read_only=False, bind_host='
     if bind_host != '127.0.0.1' and (not read_only or not company_address(bind_host)):
         raise PilotError('Network access is only available on the private read-only dashboard')
     flow = Workflow(store)
+    automation = Automation(store, flow, config, worker.catalog if isinstance(worker, Worker) else [])
     attention = Attention(store)
     token = secrets.token_urlsafe(32)
     nonce = secrets.token_urlsafe(24)
@@ -274,7 +285,7 @@ def server_for(root, config, store, worker=None, *, read_only=False, bind_host='
                 html = (root / 'pilot' / 'dashboard.html').read_text(encoding='utf-8-sig').replace('__TOKEN__', '' if read_only else token).replace('__NONCE__', nonce)
                 return self.respond(200, html, 'text/html')
             if self.path == '/api/status':
-                return self.respond(200, dict(store.summary(), browser_attention=attention.current(), read_only_dashboard=read_only, source=config['source'], ai=config['ai'], model=config['model'], poll_seconds=config['poll_seconds'], max_daily_calls=config['max_daily_calls'], max_daily_tokens=config['max_daily_tokens'], publishing='reviewed browser' if config.get('publishing',{}).get('enabled') else 'disabled', validation_snapshot=config.get('validation_snapshot',False), catalog=config['catalog_file'], efficiency=flow.metrics(), pacing=flow.pacing(config),next_scan_at=store.setting('next_scan_at')))
+                return self.respond(200, dict(store.summary(), browser_attention=attention.current(), read_only_dashboard=read_only, source=config['source'], ai=config['ai'], model=config['model'], poll_seconds=config['poll_seconds'], max_daily_calls=config['max_daily_calls'], max_daily_tokens=config['max_daily_tokens'], publishing=('automatic browser' if automatic(config) else 'reviewed browser') if config.get('publishing',{}).get('enabled') else 'disabled', automation=automation.status(), validation_snapshot=config.get('validation_snapshot',False), catalog=config['catalog_file'], efficiency=flow.metrics(), pacing=flow.pacing(config),next_scan_at=store.setting('next_scan_at')))
             if self.path == '/api/campaign-options':
                 return self.respond(200, {'communities':[{'name':sub,'policy':policy(config,sub)} for sub in config['subreddits']], 'enabled':config['ai']=='oneapi'})
             if self.path == '/api/items':
@@ -284,6 +295,10 @@ def server_for(root, config, store, worker=None, *, read_only=False, bind_host='
                     blocker=''
                     if is_campaign(r['payload']):
                         try: require_post_policy(r['payload'],config)
+                        except PilotError as error: blocker=str(error)
+                    if automatic(config) and r['result'] and r['result']['decision']=='recommend' and r['status'] in ('review','approved'):
+                        try:
+                            with store.db() as c: require_checked(c,r['id'],r['payload'],r['result'],config)
                         except PilotError as error: blocker=str(error)
                     rows.append(dict(r,reply_account=publisher_for(config,r['payload']['subreddit']),draft_hash=draft_hash(publication_text(r['result'])) if r['result'] else '',publication=outbox.get(r['id']),publication_blocker=blocker))
                 return self.respond(200, rows)
@@ -314,7 +329,7 @@ def server_for(root, config, store, worker=None, *, read_only=False, bind_host='
                         attention.resume()
                     if payload['action'] == 'resume':
                         store.set_setting('gateway_failures', '0')
-                    store.set_setting('message', 'Paused by reviewer' if payload['action'] == 'pause' else 'Resumes on the next scheduled cycle')
+                    store.set_setting('message', 'Paused by operator' if payload['action'] == 'pause' else 'Resumes on the next scheduled cycle')
                 elif self.path == '/api/attention/check':
                     if not worker:
                         raise PilotError('Worker is unavailable; no browser check was started')
@@ -377,7 +392,7 @@ def serve(root):
     signal.signal(signal.SIGTERM, shutdown)
     signal.signal(signal.SIGINT, shutdown)
     if hasattr(signal,'SIGBREAK'):signal.signal(signal.SIGBREAK,shutdown)
-    publishing='reviewed publication enabled' if config.get('publishing',{}).get('enabled') else 'publishing disabled'
+    publishing=('automatic publication enabled' if automatic(config) else 'reviewed publication enabled') if config.get('publishing',{}).get('enabled') else 'publishing disabled'
     print('MeDo pilot ready: http://127.0.0.1:' + str(config['port']) + ' (' + config['source'] + '/' + config['ai'] + '; '+publishing+')', flush=True)
     if network_server:
         print('Company dashboard (read-only): http://' + config['network_dashboard_host'] + ':' + str(config['port']), flush=True)

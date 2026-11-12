@@ -92,12 +92,16 @@ def load_config(root, filename='config.json'):
     for entry in policies.values():
         if (not isinstance(entry,dict) or type(entry.get('standalone_posts',False)) is not bool or
                 type(entry.get('links_allowed',False)) is not bool or
+                type(entry.get('automated_replies',False)) is not bool or
+                type(entry.get('automated_posts',False)) is not bool or
                 not isinstance(entry.get('reference',''),str) or len(entry.get('reference',''))>1000 or
                 not isinstance(entry.get('notes',''),str) or len(entry.get('notes',''))>3000 or
                 type(entry.get('reviewed_at',0)) not in (int,float)):
             raise PilotError('Invalid standalone-post community policy')
     from .ixbrowser import validate_profiles
     validate_profiles(config)
+    from .automation import validate_config
+    validate_config(config)
     return config
 
 
@@ -220,6 +224,9 @@ class Store:
               reserved INTEGER NOT NULL, input_tokens INTEGER, output_tokens INTEGER,
               status TEXT NOT NULL, latency_ms INTEGER, created REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS quality_receipts (
+              item_id TEXT PRIMARY KEY, source_hash TEXT NOT NULL, result_hash TEXT NOT NULL,
+              policy_hash TEXT NOT NULL, checked_at REAL NOT NULL);
             ''')
             if 'priority' not in {r['name'] for r in c.execute('PRAGMA table_info(items)')}:
                 c.execute('ALTER TABLE items ADD COLUMN priority INTEGER NOT NULL DEFAULT 0')
@@ -361,3 +368,4 @@ class Store:
                     payload.pop(key, None)
                 c.execute("UPDATE items SET payload=?,result=NULL,publication_url=NULL,status='expired',error=NULL WHERE id=?", (json.dumps(payload), r['id']))
             c.execute('DELETE FROM calls WHERE created<?', (time.time() - 90 * 86400,))
+            c.execute('DELETE FROM quality_receipts WHERE checked_at<?', (cutoff,))
