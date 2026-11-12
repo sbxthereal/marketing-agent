@@ -9,7 +9,7 @@ from .platform_support import WorkerLock, chrome_executable, chrome_options
 
 
 def main():
-    p = argparse.ArgumentParser(description='MeDo Reddit pilot — incremental discovery and verified, reviewed browser replies')
+    p = argparse.ArgumentParser(description='MeDo Reddit pilot — incremental discovery and verified browser publication')
     p.add_argument('command', choices=['serve', 'once', 'doctor', 'login', 'reconcile'], nargs='?', default='serve')
     p.add_argument('--item')
     p.add_argument('--url')
@@ -27,7 +27,7 @@ def main():
                 readiness='configured'
             except PilotError as e:
                 readiness=str(e)
-            print(json.dumps({'python': sys.version.split()[0], 'platform':sys.platform,'source': config['source'], 'ai': config['ai'], 'model': config['model'], 'catalog_entries': len(catalog), 'gateway_key_configured': bool(env.get('ONEAPI_API_KEY')), 'playwright_installed': importlib.util.find_spec('playwright') is not None, 'browser_use_installed': importlib.util.find_spec('browser_use') is not None, 'chrome_installed': bool(chrome_executable()),'browser_headless':config.get('browser_headless',False), 'browser_readiness':readiness,'publishing_enabled':config.get('publishing',{}).get('enabled',False),'publishing_requires_explicit_review':True}, indent=2))
+            print(json.dumps({'python': sys.version.split()[0], 'platform':sys.platform,'source': config['source'], 'ai': config['ai'], 'model': config['model'], 'catalog_entries': len(catalog), 'gateway_key_configured': bool(env.get('ONEAPI_API_KEY')), 'playwright_installed': importlib.util.find_spec('playwright') is not None, 'browser_use_installed': importlib.util.find_spec('browser_use') is not None, 'chrome_installed': bool(chrome_executable()),'browser_headless':config.get('browser_headless',False), 'browser_readiness':readiness,'publishing_enabled':config.get('publishing',{}).get('enabled',False),'publishing_requires_explicit_review':config.get('publishing',{}).get('mode','manual') != 'automatic'}, indent=2))
         elif args.command == 'login':
             if config.get('browser_backend') in ('ixbrowser', 'aliasmode'):
                 raise PilotError('Sign in directly through the selected managed profiles, then start the worker; pilot login is for its dedicated Chrome profile')

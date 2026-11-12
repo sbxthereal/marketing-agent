@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from pilot.automation import Automation, validate_config
 from pilot.campaigns import analyze_campaign, create_campaign
@@ -193,6 +193,17 @@ class AutomaticTests(unittest.TestCase):
         self.store.complete(post['id'],result); self.auto.queue_ready()
         self.assertIsNone(self.flow.claim_publication(self.config))
         self.assertIn('cooldown', next(r for r in self.flow.outbox() if r['item_id']==post['id'])['error'])
+
+    def test_doctor_reports_selected_approval_mode(self):
+        import io
+        from contextlib import redirect_stdout
+        from pilot.__main__ import main
+        for mode in ('automatic', 'manual'):
+            self.config['publishing']['mode']=mode
+            output=io.StringIO()
+            with patch('pilot.__main__.load_config',return_value=self.config), patch('pilot.__main__.load_catalog',return_value=self.catalog), patch('pilot.gateway.read_env',return_value={}), patch('sys.argv',['pilot','doctor']), redirect_stdout(output):
+                main()
+            self.assertEqual(json.loads(output.getvalue())['publishing_requires_explicit_review'],mode=='manual')
 
     def test_invalid_automatic_settings_fail_at_startup(self):
         for settings in ({'campaign_interval_hours':1}, {'campaign_plan':[self.plan(),self.plan()]}):
