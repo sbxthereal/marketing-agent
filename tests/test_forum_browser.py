@@ -144,8 +144,14 @@ class ForumBrowserTests(unittest.TestCase):
             sock.bind(('127.0.0.1',0)); config['port']=sock.getsockname()[1]
         worker=Mock()
         server=server_for(ROOT,config,self.store,worker)
+        # Windows cannot remove SQLite files while a dashboard request still
+        # owns a handle. Join request handlers before the fixture directory.
+        server.daemon_threads=False
         thread=threading.Thread(target=server.serve_forever,daemon=True); thread.start()
-        self.addCleanup(server.server_close); self.addCleanup(server.shutdown)
+        def close_dashboard():
+            self.reader.page.close()
+            server.shutdown(); server.server_close(); thread.join(timeout=5)
+        self.addCleanup(close_dashboard)
         self.context.unroute('**/*')
         page=self.reader.page; errors=[]; page.on('pageerror',lambda e:errors.append(str(e)))
         page.set_default_timeout(10000)
