@@ -7,22 +7,31 @@ from .core import PilotError
 
 
 class Attention:
-    def __init__(self, store):
+    def __init__(self, store, scope=''):
         self.store = store
+        self.scope = scope
+        self.key = 'browser_attention'+('.'+scope if scope else '')
+        self.pause_key = 'paused'+('.'+scope if scope else '')
 
     def current(self):
-        raw = self.store.setting('browser_attention')
+        raw = self.store.setting(self.key)
         return json.loads(raw) if raw else None
 
-    @staticmethod
-    def _read(c):
-        row = c.execute("SELECT value FROM settings WHERE key='browser_attention'").fetchone()
+    def _read(self,c):
+        row = c.execute("SELECT value FROM settings WHERE key=?",(self.key,)).fetchone()
         return json.loads(row[0]) if row and row[0] else None
 
-    @staticmethod
-    def _write(c, value):
-        c.execute("INSERT OR REPLACE INTO settings VALUES ('browser_attention',?)",
-                  (json.dumps(value) if value else '',))
+    def _write(self,c, value):
+        c.execute("INSERT OR REPLACE INTO settings VALUES (?,?)",
+                  (self.key,json.dumps(value) if value else ''))
+
+    def _pause(self,c,value='1'):
+        c.execute('INSERT OR REPLACE INTO settings VALUES (?,?)',(self.pause_key,value))
+
+    def _uncertain(self,c):
+        if not self.scope:
+            return c.execute("SELECT 1 FROM outbox WHERE state='uncertain' LIMIT 1").fetchone()
+        return c.execute("SELECT 1 FROM outbox o JOIN items i ON i.id=o.item_id WHERE o.state='uncertain' AND COALESCE(json_extract(i.payload,'$.platform'),'reddit')=? LIMIT 1",(self.scope,)).fetchone()
 
     def record(self, details, message):
         with self.store.db() as c:
@@ -34,7 +43,7 @@ class Attention:
                 # Preserve the first blocked session until it is explicitly resolved.
                 value = dict(previous, state='blocked', message=message)
             self._write(c, value)
-            c.execute("INSERT OR REPLACE INTO settings VALUES ('paused','1')")
+            self._pause(c)
             c.execute("INSERT OR REPLACE INTO settings VALUES ('message',?)", (message,))
         return value
 
@@ -48,7 +57,7 @@ class Attention:
                 return
             value.update(state='checking', check_id=uuid.uuid4().hex, message='Checking the same browser session…')
             self._write(c, value)
-            c.execute("INSERT OR REPLACE INTO settings VALUES ('paused','1')")
+            self._pause(c)
 
     def pause(self):
         with self.store.db() as c:
@@ -57,7 +66,7 @@ class Attention:
             if value:
                 value.update(state='blocked', message='Paused by reviewer; check again when ready')
                 self._write(c, value)
-            c.execute("INSERT OR REPLACE INTO settings VALUES ('paused','1')")
+            self._pause(c)
             c.execute("INSERT OR REPLACE INTO settings VALUES ('message','Paused by reviewer')")
 
     def resume(self):
@@ -65,9 +74,9 @@ class Attention:
             c.execute('BEGIN IMMEDIATE')
             if self._read(c):
                 raise PilotError('Browser verification is pending; use Check and resume on the alert')
-            if c.execute("SELECT 1 FROM outbox WHERE state='uncertain' LIMIT 1").fetchone():
+            if self._uncertain(c):
                 raise PilotError('An uncertain reply needs reconciliation before resuming')
-            c.execute("INSERT OR REPLACE INTO settings VALUES ('paused','0')")
+            self._pause(c,'0')
 
     def finish(self, ident, check_id, error=None):
         with self.store.db() as c:
@@ -81,13 +90,13 @@ class Attention:
                 self._write(c, value)
                 c.execute("INSERT OR REPLACE INTO settings VALUES ('message',?)", (error,))
                 return False
-            if c.execute("SELECT 1 FROM outbox WHERE state='uncertain' LIMIT 1").fetchone():
+            if self._uncertain(c):
                 value.update(state='blocked', last_checked_at=time.time(),
                              message='Browser access works. An uncertain reply still needs reconciliation before resuming.')
                 self._write(c, value)
                 return False
             self._write(c, None)
-            c.execute("INSERT OR REPLACE INTO settings VALUES ('paused','0')")
+            self._pause(c,'0')
             c.execute("INSERT OR REPLACE INTO settings VALUES ('gateway_failures','0')")
             c.execute("INSERT OR REPLACE INTO settings VALUES ('message','Browser access verified; discovery can continue. Blocked publication attempts still require review.')")
             return True
@@ -99,4 +108,4 @@ class Attention:
             if value:
                 value.update(state='blocked', message='Worker restarted. Solve in the original profile, then check access again.')
                 self._write(c, value)
-                c.execute("INSERT OR REPLACE INTO settings VALUES ('paused','1')")
+                self._pause(c)

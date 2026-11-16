@@ -1,0 +1,84 @@
+[
+  {
+    "id": "dev",
+    "type": "dev",
+    "name": "DEV Community",
+    "enabled": true,
+    "profile_count": 1,
+    "origin": "https://dev.to",
+    "username": "",
+    "feeds": [
+      "https://dev.to/t/help/latest",
+      "https://dev.to/t/discuss/latest"
+    ],
+    "compose_url": "https://dev.to/new",
+    "poll_seconds": 1800,
+    "policy": {
+      "collection": true,
+      "automated_replies": true,
+      "automated_posts": true,
+      "links_allowed": true,
+      "reference": "https://dev.to/devteam/introducing-ai-disclosure-on-dev-tools-for-nuance-clarity-and-better-feeds-34mk",
+      "notes": "Useful original technical content, accurate claims, explicit Fully Autonomous disclosure and visible MeDo affiliation. No unrelated promotional replies or fake firsthand experience.",
+      "reviewed_at": 1794815001.7188458
+    },
+    "campaign_plan": [
+      {
+        "id": "client-portal-outline",
+        "template_id": "medo-app-builder",
+        "format": "tutorial",
+        "brief": "Explain how to plan a client portal with a project list and a status screen using a proposed MeDo prompt. Include a test checklist for access to project data, empty states, and updates. This is a proposed workflow, not an app we have built or tested. Use only verified generation and iteration claims."
+      },
+      {
+        "id": "portfolio-start",
+        "template_id": "portfolio-starting-point",
+        "format": "template",
+        "brief": "Explain how a designer can evaluate the MeDo portfolio website example as a starting point for showcasing projects. Give a content checklist and checks to perform before publishing. Do not claim contact forms or other behavior have been tested."
+      },
+      {
+        "id": "waitlist-evaluation",
+        "template_id": "waitlist-starting-point",
+        "format": "template",
+        "brief": "Explain how a founder can evaluate the MeDo waitlist website example as a launch-page starting point. Include clear checks for email storage, delivery and consent before use; these functions have not been tested. Do not claim conversion improvements or built-in integrations."
+      }
+    ]
+  },
+  {
+    "id": "indiehackers",
+    "type": "indiehackers",
+    "name": "Indie Hackers",
+    "enabled": true,
+    "profile_count": 1,
+    "origin": "https://www.indiehackers.com",
+    "username": "",
+    "feeds": [
+      "https://www.indiehackers.com/"
+    ],
+    "compose_url": "https://www.indiehackers.com/new-post",
+    "poll_seconds": 3600,
+    "policy": {
+      "collection": false,
+      "automated_replies": false,
+      "automated_posts": false,
+      "links_allowed": false,
+      "site_exception": false,
+      "reference": "https://www.indiehackers.com/terms",
+      "notes": "Prepared but inactive: the published terms restrict scraping and auto-responders. A site-specific exception is required before activating automation.",
+      "reviewed_at": 1794815001.718847
+    },
+    "campaign_plan": []
+  },
+  {
+    "id": "forum",
+    "type": "discourse",
+    "name": "Additional Discourse forum",
+    "enabled": false,
+    "profile_count": 1,
+    "origin": "",
+    "username": "",
+    "feeds": [],
+    "poll_seconds": 3600,
+    "policy": {},
+    "campaign_plan": []
+  }
+]

@@ -103,6 +103,7 @@ class Gateway:
 
 
 def messages_for(post, catalog):
+    from .channels import channel_style
     # A community commenter can write "OP follow-up:" inside their text.
     # Do not rely on the model to resolve that impersonation. Only author-
     # matched follow-ups enter its requirements context. The full discussion
@@ -111,7 +112,7 @@ def messages_for(post, catalog):
                      'op_followups': [c['body'] for c in discussion(post) if c['role'] == 'op']},
             'catalog': [dict({k:t[k] for k in ('id','name','claims','limitations')},
                              allowed_claim_ids=list(t['claims'])) for t in catalog]}
-    return [{'role': 'system', 'content': SYSTEM},
+    return [{'role': 'system', 'content': SYSTEM + channel_style(post)},
             {'role': 'user', 'content': 'Untrusted input JSON:\n' + json.dumps(data, ensure_ascii=False)}]
 
 
@@ -167,7 +168,8 @@ def analyze(gateway, post, catalog, config, store):
 def review_recommendation(gateway,post,catalog,candidate,config,store):
     from .quality import concerns, hold
     messages=messages_for(post,catalog)
-    messages[0]['content']=REVIEW_SYSTEM
+    from .channels import channel_style
+    messages[0]['content']=REVIEW_SYSTEM + channel_style(post)
     messages.append({'role':'user','content':'Untrusted proposed recommendation JSON:\n'+json.dumps(candidate,ensure_ascii=False)})
     model=config.get('review_model',config['model'])
     reserve=len(json.dumps(messages,ensure_ascii=False).encode())+config['max_output_tokens']+1000

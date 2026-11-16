@@ -59,7 +59,8 @@ class Workflow:
     @staticmethod
     def author_key(post):
         author=post.get('author','').lower()
-        return draft_hash(author) if author and author not in ('[deleted]','[removed]') else ''
+        prefix = post['platform']+':' if post.get('platform','reddit') != 'reddit' else ''
+        return draft_hash(prefix+author) if author and author not in ('[deleted]','[removed]') else ''
 
     def seen(self, item_id):
         with self.store.db() as c:
@@ -138,6 +139,8 @@ class Workflow:
             result = json.loads(row['result'])
             draft = result['draft']
             post = json.loads(row['payload'])
+            from .channels import require_channel_ready
+            require_channel_ready(self.store, config, post)
             if automatic:
                 from .automation import require_checked
                 if c.execute("SELECT 1 FROM settings WHERE key='paused' AND value='1'").fetchone():
@@ -164,13 +167,17 @@ class Workflow:
             if automatic:
                 c.execute("UPDATE items SET status='approved',error=NULL WHERE id=?", (item_id,))
 
-    def recover(self):
+    def recover(self, isolate=False):
         # Never automatically repeat a send after a crash. Checking is read-only,
         # but choosing uncertainty here makes the recovery policy conservative.
         with self.store.db() as c:
             c.execute("UPDATE outbox SET state='uncertain',error='Worker restarted during publication; inspect Reddit before retrying',updated=? WHERE state IN ('checking','submitting')", (time.time(),))
             if c.execute("SELECT 1 FROM outbox WHERE state='uncertain' LIMIT 1").fetchone():
-                c.execute("INSERT OR REPLACE INTO settings VALUES ('paused','1')")
+                if isolate:
+                    for r in c.execute("SELECT DISTINCT COALESCE(json_extract(i.payload,'$.platform'),'reddit') AS platform FROM outbox o JOIN items i ON i.id=o.item_id WHERE o.state='uncertain'").fetchall():
+                        c.execute('INSERT OR REPLACE INTO settings VALUES (?,?)',('paused.'+r['platform'],'1'))
+                else:
+                    c.execute("INSERT OR REPLACE INTO settings VALUES ('paused','1')")
                 c.execute("INSERT OR REPLACE INTO settings VALUES ('message','An uncertain publication needs reconciliation before resuming')")
 
     def retry_preflight(self,item_id,expected_hash,config):
@@ -194,6 +201,11 @@ class Workflow:
             c.execute('BEGIN IMMEDIATE')
             rows = c.execute("SELECT o.*,i.payload,i.status AS item_status,i.result FROM outbox o JOIN items i ON i.id=o.item_id WHERE o.state='ready' ORDER BY requested").fetchall()
             for row in rows:
+                post=json.loads(row['payload'])
+                if post.get('platform','reddit') != config.get('platform','reddit'):
+                    continue
+                from .channels import require_channel_ready
+                require_channel_ready(self.store, config, post)
                 if row['item_status'] != 'approved' or now-row['requested'] > pub.get('approval_hours', 24)*3600 or not row['result'] or draft_hash(publication_text(json.loads(row['result']))) != row['draft_hash']:
                     c.execute("UPDATE outbox SET state='cancelled',error='Approval expired or draft changed',updated=? WHERE item_id=?", (now,row['item_id']))
                     continue
@@ -230,6 +242,8 @@ class Workflow:
                 raise PilotError('Automatic submission requires the current configuration')
             if config:
                 post=json.loads(row['payload'])
+                from .channels import require_channel_ready
+                require_channel_ready(self.store, config, post)
                 if row['approval_source'] == 'automatic':
                     from .automation import require_checked
                     require_checked(c, item_id, post, json.loads(row['result']), config)
@@ -239,8 +253,13 @@ class Workflow:
             c.execute("UPDATE outbox SET state='submitting',submitted=?,updated=? WHERE item_id=?", (time.time(),time.time(),item_id))
 
     def publication_done(self, job, permalink, config):
-        check = thread_permalink if is_campaign(job['post']) else comment_permalink
-        if not check(permalink, job['post'], config['subreddits']):
+        if config.get('platform','reddit') != 'reddit':
+            from .channels import published_url
+            valid = published_url(permalink, job['post'], config['channel'])
+        else:
+            check = thread_permalink if is_campaign(job['post']) else comment_permalink
+            valid = check(permalink, job['post'], config['subreddits'])
+        if not valid:
             raise PilotError('Publication permalink did not match its approved destination')
         with self.store.db() as c:
             c.execute('BEGIN IMMEDIATE')

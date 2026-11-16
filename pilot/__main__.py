@@ -64,6 +64,7 @@ def main():
                     url=worker.browser.verify_publication(job,args.url)
                     worker.flow.publication_done(job,url,config)
             finally:
+                worker.channels.close()
                 if worker.browser:
                     worker.browser.close()
                 lock.close()

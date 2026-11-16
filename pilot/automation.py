@@ -70,9 +70,7 @@ def record_quality(store, post, result, config):
     # The reply validator adds the catalog URL. Omit only that generated trailing
     # URL when the automatic destination does not permit links; keep disclosure.
     if automatic(config) and not is_campaign(post) and policy(config, post['subreddit']).get('links_allowed') is not True:
-        body, sep, link = result['draft'].rpartition('\n')
-        if sep and link.startswith('https://'):
-            result = dict(result, draft=body)
+        result = dict(result, draft='\n'.join(line for line in result['draft'].split('\n') if not line.startswith('https://')))
     with store.db() as c:
         c.execute('INSERT OR REPLACE INTO quality_receipts VALUES (?,?,?,?,?)',
                   (post['id'], fingerprint(post), fingerprint(result), policy_hash(config, post['subreddit']), time.time()))
@@ -103,8 +101,9 @@ class Automation:
             c.execute('CREATE TABLE IF NOT EXISTS campaign_plan_runs (plan_id TEXT PRIMARY KEY, plan_hash TEXT NOT NULL, item_id TEXT NOT NULL, created REAL NOT NULL)')
 
     def active(self):
+        from .channels import paused
         return (automatic(self.config) and self.config['publishing'].get('enabled') is True
-                and self.store.setting('paused') != '1')
+                and not paused(self.store, self.config))
 
     def queue_ready(self):
         if not self.active():
@@ -115,7 +114,7 @@ class Automation:
         require_publishing(self.config)
         with self.store.db() as c:
             # Legacy drafts have no receipt and are never swept into publication.
-            rows = c.execute("SELECT i.id,i.result FROM items i JOIN quality_receipts q ON q.item_id=i.id LEFT JOIN outbox o ON o.item_id=i.id WHERE i.status='review' AND o.item_id IS NULL ORDER BY q.checked_at LIMIT 20").fetchall()
+            rows = c.execute("SELECT i.id,i.result FROM items i JOIN quality_receipts q ON q.item_id=i.id LEFT JOIN outbox o ON o.item_id=i.id WHERE i.status='review' AND o.item_id IS NULL AND COALESCE(json_extract(i.payload,'$.platform'),'reddit')=? ORDER BY q.checked_at LIMIT 20", (self.config.get('platform','reddit'),)).fetchall()
         for row in rows:
             result = json.loads(row['result']) if row['result'] else {}
             if result.get('decision') != 'recommend':
@@ -145,19 +144,20 @@ class Automation:
                 require_automatic_policy(post, self.config)
             except PilotError:
                 continue
-            post.update(id='campaign_plan_'+fingerprint(entry['id'])[:24], planned_template_id=entry['template_id'],
+            plan_id = (self.config['platform']+':' if self.config.get('platform','reddit') != 'reddit' else '')+entry['id']
+            post.update(id='campaign_plan_'+fingerprint(plan_id)[:24], planned_template_id=entry['template_id'],
                         discovery_source='Scheduled MeDo content plan: '+entry['id'])
             with self.store.db() as c:
                 c.execute('BEGIN IMMEDIATE')
-                if c.execute('SELECT 1 FROM campaign_plan_runs WHERE plan_id=?', (entry['id'],)).fetchone():
+                if c.execute('SELECT 1 FROM campaign_plan_runs WHERE plan_id=?', (plan_id,)).fetchone():
                     continue
                 if c.execute('SELECT 1 FROM campaign_plan_runs WHERE created>?', (now-settings.get('campaign_interval_hours', 168)*3600,)).fetchone():
                     return
                 # A plan stays pending while another post is drafting/queued.
-                if c.execute("SELECT 1 FROM items WHERE json_extract(payload,'$.kind')='campaign' AND status IN ('queued','processing','approved')").fetchone():
+                if c.execute("SELECT 1 FROM items WHERE json_extract(payload,'$.kind')='campaign' AND status IN ('queued','processing','approved') AND COALESCE(json_extract(payload,'$.platform'),'reddit')=?",(self.config.get('platform','reddit'),)).fetchone():
                     return
                 c.execute('INSERT INTO items(id,payload,created,updated,priority) VALUES (?,?,?,?,?)', (post['id'], json.dumps(post), now, now, 30))
-                c.execute('INSERT INTO campaign_plan_runs VALUES (?,?,?,?)', (entry['id'], fingerprint(entry), post['id'], now))
+                c.execute('INSERT INTO campaign_plan_runs VALUES (?,?,?,?)', (plan_id, fingerprint(entry), post['id'], now))
             return  # One new campaign per scheduler pass, never a catch-up burst.
 
     def status(self):
@@ -171,8 +171,8 @@ class Automation:
             if self.store.setting('paused') == '1':
                 blockers.append('Worker is paused')
         with self.store.db() as c:
-            completed = [r['plan_id'] for r in c.execute('SELECT plan_id FROM campaign_plan_runs ORDER BY created')]
-            ready = c.execute("SELECT COUNT(*) FROM outbox WHERE approval_source='automatic' AND state IN ('ready','checking','submitting')").fetchone()[0]
+            completed = [r['plan_id'] for r in c.execute("SELECT p.plan_id FROM campaign_plan_runs p JOIN items i ON i.id=p.item_id WHERE COALESCE(json_extract(i.payload,'$.platform'),'reddit')=? ORDER BY p.created",(self.config.get('platform','reddit'),))]
+            ready = c.execute("SELECT COUNT(*) FROM outbox o JOIN items i ON i.id=o.item_id WHERE o.approval_source='automatic' AND o.state IN ('ready','checking','submitting') AND COALESCE(json_extract(i.payload,'$.platform'),'reddit')=?",(self.config.get('platform','reddit'),)).fetchone()[0]
         destinations = []
         for sub in self.config.get('subreddits', []):
             entry = {'community': sub}

@@ -54,10 +54,14 @@ def create_campaign(payload, config):
     if kind not in FORMATS or not isinstance(brief, str) or not 40 <= len(brief.strip()) <= 2400:
         raise PilotError('Choose a post format and provide a specific 40–2400 character brief')
     sub = sub.lower()
-    return {'id': 'campaign_'+uuid.uuid4().hex, 'kind': 'campaign', 'subreddit': sub,
+    result = {'id': 'campaign_'+uuid.uuid4().hex, 'kind': 'campaign', 'subreddit': sub,
             'url': 'https://www.reddit.com/r/'+sub+'/submit', 'title': 'MeDo '+kind.replace('_', ' '),
             'body': brief.strip(), 'format': kind, 'policy_hash': policy_hash(config, sub),
             'discovery_source': 'Team-authored MeDo post brief'}
+    if config.get('platform','reddit') != 'reddit':
+        ch = config['channel']
+        result.update(platform=ch['id'], platform_type=ch['type'], url=ch.get('compose_url') or ch['origin'])
+    return result
 
 
 def publication_text(result):
@@ -84,7 +88,8 @@ def validate_campaign_result(raw, post, catalog, config):
     fields = {'decision','reason','title','draft','template_id','evidence','claim_ids'}
     if not isinstance(raw, dict) or set(raw) != fields or raw['decision'] not in ('recommend','review','skip'):
         raise PilotError('Invalid MeDo post response schema')
-    for key,cap in [('reason',1000),('title',180),('draft',3500),('template_id',100),('evidence',500)]:
+    dev = post.get('platform_type') == 'dev'
+    for key,cap in [('reason',1000),('title',180),('draft',7000 if dev else 3500),('template_id',100),('evidence',500)]:
         if not isinstance(raw[key],str) or len(raw[key]) > cap:
             raise PilotError('Invalid MeDo post field: '+key)
     if not raw['reason'] or not isinstance(raw['claim_ids'],list) or not all(isinstance(c,str) for c in raw['claim_ids']):
@@ -100,8 +105,8 @@ def validate_campaign_result(raw, post, catalog, config):
         raise PilotError('Unsupported MeDo post claim')
     copy = raw['title']+'\n'+raw['draft']
     if (not 10 <= len(raw['title'].strip()) <= 180 or '\n' in raw['title'] or
-            not 80 <= len(raw['draft'].split()) <= 260 or not re.search(r'\bMeDo\b',raw['draft'])):
-        raise PilotError('MeDo post needs a specific title and useful 80–260 word body')
+            not (300 if dev else 80) <= len(raw['draft'].split()) <= (650 if dev else 260) or not re.search(r'\bMeDo\b',raw['draft'])):
+        raise PilotError('MeDo post length or title does not meet the destination requirements')
     if re.search(r'https?://|www\.|\]\(|\b(guaranteed|game.?changer|revolutionary|sign up now|upvote|unlimited|100% secure|production.ready)\b',copy,re.I):
         raise PilotError('Remove model links, pressure or unsupported marketing claims')
     if re.search(r'\b(mobile product|medo lists|it lists|can be considered as|the catalog says|the documentation states)\b',copy,re.I):
@@ -109,6 +114,8 @@ def validate_campaign_result(raw, post, catalog, config):
     if re.search(r'\b(i used|i.ve used|my clients|our customers|we built|i built)\b',copy,re.I):
         raise PilotError('Remove unverified first-hand claims')
     result = dict(raw, title=raw['title'].strip(), draft='I work on MeDo.\n\n'+raw['draft'].strip())
+    if post.get('platform','reddit') != 'reddit':
+        result['draft'] += '\n\nAI disclosure: Fully Autonomous. Published by the MeDo team’s automated agent.'
     if policy(config, post['subreddit']).get('links_allowed') is True:
         result['draft'] += '\n\n'+template['url']
     return result
@@ -116,11 +123,12 @@ def validate_campaign_result(raw, post, catalog, config):
 
 def analyze_campaign(gateway, post, catalog, config, store):
     from .gateway import parse_recommendation
+    from .channels import channel_style
     held = {'decision':'review','reason':'','title':'','draft':'','template_id':'','evidence':'','claim_ids':[]}
     data = {'format':post['format'],'brief':post['body'], 'community':post['subreddit'],
             'community_rules':policy(config,post['subreddit']),
             'catalog':[dict({k:t[k] for k in ('id','name','claims','limitations')},allowed_claim_ids=list(t['claims'])) for t in catalog]}
-    messages = [{'role':'system','content':SYSTEM},{'role':'user','content':json.dumps(data,ensure_ascii=False)}]
+    messages = [{'role':'system','content':SYSTEM + channel_style(post, campaign=True)},{'role':'user','content':json.dumps(data,ensure_ascii=False)}]
     for stage in ('draft','quality'):
         model = config.get('review_model',config['model']) if stage == 'quality' else config['model']
         reserve = len(json.dumps(messages,ensure_ascii=False).encode())+config['max_output_tokens']+1000

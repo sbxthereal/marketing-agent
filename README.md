@@ -77,3 +77,7 @@ A new post can be drafted before rules are recorded, but cannot be queued for pu
 Text-post submission verifies the logged-in account, composer community, approved title/body, unchanged policy and final post permalink. A required flair, unsupported composer layout, CAPTCHA or ambiguous destination stops submission. If a send may have happened, the worker pauses and requires reconciliation; it never repeats the click automatically. Use `python -m pilot reconcile --item CAMPAIGN_ID --url POST_PERMALINK` for an unresolved post attempt. Manual publication recording is explicitly unverified and consumes the shared posting allowance.
 
 The automated post composer is tested with intercepted local browser fixtures. A real authenticated Reddit composer still needs a supervised validation; fixture success is not evidence of live publication. No account signup, CAPTCHA solver or activity disguised as independent customers is included.
+
+## Multiple platforms
+
+See [MULTIPLATFORM.md](MULTIPLATFORM.md) for autonomous Windows operation, one account per platform, shared limits and account/CAPTCHA controls. The initial preparation covers Reddit, DEV, an inactive Indie Hackers channel and a configurable Discourse adapter. Live readiness is shown per channel; fixture tests are not live posting validation.

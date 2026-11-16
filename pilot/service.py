@@ -17,21 +17,26 @@ from .platform_support import WorkerLock
 from .attention import Attention
 from .campaigns import analyze_campaign, create_campaign, is_campaign, publication_text, policy, require_post_policy
 from .automation import Automation, automatic, require_checked
+from .channels import Channels, paused
 
 
 class Worker:
     def __init__(self, root, config, catalog, store):
         self.root, self.config, self.catalog, self.store = root, config, catalog, store
+        if config.get('channels') and store.setting('channel.account.reddit'):
+            config['publishing']['reddit_username'] = store.setting('channel.account.reddit')
+            config['publishing']['enabled'] = True
         self.stop = threading.Event()
         self.wake = threading.Event()
         self.browser = None
         self.gateway = None
         self.fixtures = json.loads((root / config['fixtures_file']).read_text(encoding='utf-8-sig')) if config['source'] == 'demo' else []
         self.flow = Workflow(store)
-        self.flow.recover()
-        self.attention = Attention(store)
+        self.flow.recover(isolate=bool(config.get('channels')))
+        self.attention = Attention(store, 'reddit' if config.get('channels') else '')
         self.attention.recover()
         self.automation = Automation(store, self.flow, config, catalog)
+        self.channels = Channels(root, config, catalog, store, self.flow)
         self.next_scan = 0
         self.idle_scans = 0
 
@@ -63,9 +68,14 @@ class Worker:
             if isinstance(e,BrowserAttention):
                 self.attention.record(e.details, message)
             if isinstance(e,BrowserAttention) or any(x['item_id']==job['item_id'] and x['state']=='uncertain' for x in self.flow.outbox()):
-                self.store.set_setting('paused','1')
+                self.store.set_setting('paused.reddit' if self.config.get('channels') else 'paused','1')
 
     def cycle(self):
+        self.reddit_controls()
+        self.channels.tick()
+        if self.config.get('channels') and (not self.config.get('publishing',{}).get('reddit_username') or not self.config.get('publishing',{}).get('enabled')):
+            # An unconfigured Reddit account must not pause unrelated channels.
+            return
         self.automation.schedule()
         self.draft_campaigns()
         attention = self.attention.current()
@@ -78,6 +88,38 @@ class Worker:
             self._cycle()
         except BrowserAttention as error:
             self.attention.record(error.details, str(error))
+
+    def reddit_controls(self):
+        action = self.store.setting('channel.command.reddit')
+        if not action: return
+        self.store.set_setting('channel.command.reddit','')
+        try:
+            if action == 'pause':
+                self.attention.pause(); return
+            if self.config.get('browser_backend') in ('aliasmode','ixbrowser'):
+                raise PilotError('Use the assigned managed Reddit profile to sign in; its account binding stays in configuration')
+            if not self.browser:
+                from .browser import BrowserReader
+                self.browser = BrowserReader(self.root,self.config,self.catalog,self.flow,login_only=True)
+            if action == 'open':
+                self.store.set_setting('paused.reddit','1')
+                self.browser.page.goto('https://www.reddit.com/login/',wait_until='domcontentloaded')
+                self.browser.page.bring_to_front(); return
+            self.browser._guard()
+            identity = self.browser._account()
+            expected = self.config['publishing'].get('reddit_username','')
+            if expected and identity.casefold() != expected.casefold():
+                raise PilotError('Reddit account differs from its fixed binding')
+            with self.store.db() as c:
+                if self.attention._uncertain(c): raise PilotError('Reconcile the uncertain Reddit publication before resuming')
+            self.store.set_setting('channel.account.reddit',identity)
+            self.config['publishing'].update(reddit_username=identity,enabled=True)
+            with self.store.db() as c:
+                self.attention._write(c,None)
+                self.attention._pause(c,'0')
+            self.next_scan = 0
+        except PilotError as error:
+            self.attention.record(getattr(error,'details',{}),str(error))
 
     def draft_campaigns(self):
         # An explicitly queued team brief needs no Reddit access. A browser pause
@@ -124,13 +166,13 @@ class Worker:
             self.attention.finish(attention['id'], attention['check_id'], message)
 
     def _cycle(self):
-        if self.store.setting('paused') == '1':
+        if paused(self.store,self.config):
             return
         self.store.expire(self.config['retention_days'])
         self.flow.expire(self.config['retention_days'])
         self.automation.queue_ready()
         self.publish_ready()
-        if self.store.setting('paused') == '1':
+        if paused(self.store,self.config):
             return
         if self.config['source'] == 'demo':
             posts = self.fixtures
@@ -149,7 +191,7 @@ class Worker:
         if self.config['ai'] == 'oneapi' and not self.gateway:
             self.gateway = Gateway(self.root / '.env')
         for _ in range(self.config['max_items_per_cycle']):
-            if self.stop.is_set() or self.store.setting('paused') == '1':
+            if self.stop.is_set() or paused(self.store,self.config):
                 break
             post = self.store.claim(self.config['max_attempts'], kind='reply')
             if not post:
@@ -194,12 +236,12 @@ class Worker:
                     failures = int(self.store.setting('gateway_failures', '0')) + 1
                     self.store.set_setting('gateway_failures', str(failures))
                     if str(e) in ('Gateway HTTP 401', 'Gateway HTTP 403', 'Gateway HTTP 429') or failures >= 3:
-                        self.store.set_setting('paused', '1')
+                        self.store.set_setting('paused.reddit' if self.config.get('channels') else 'paused', '1')
                         self.store.set_setting('message', 'Gateway access, quota, or repeated connection failure. Check connectivity and credentials before resuming.')
                         break
         self.store.set_setting('last_cycle', str(int(time.time())))
         self.automation.queue_ready()
-        if automatic(self.config) and self.store.setting('paused') != '1':
+        if automatic(self.config) and not paused(self.store,self.config):
             self.publish_ready()
 
     def run(self):
@@ -213,7 +255,7 @@ class Worker:
                     self.store.set_setting('message', str(e))
                     from .browser import BrowserAttention
                     if isinstance(e,BrowserAttention) or str(e).startswith(('Live collection','Live browser','Select approved','Configure ONEAPI','Record the publishing','Browser publishing')):
-                        self.store.set_setting('paused', '1')
+                        self.store.set_setting('paused.reddit' if self.config.get('channels') else 'paused', '1')
                     else:
                         failures += 1
                         if self.browser:
@@ -232,12 +274,13 @@ class Worker:
                             pass
                         self.browser = None
                 if failures >= 5:
-                    self.store.set_setting('paused','1')
+                    self.store.set_setting('paused.reddit' if self.config.get('channels') else 'paused','1')
                     self.store.set_setting('message','Repeated browser failure; inspect before resuming.')
                 delay = min(900,30*2**failures) if failures else self.config['poll_seconds']
                 self.wake.wait(delay)
                 self.wake.clear()
         finally:
+            self.channels.close()
             if self.browser:
                 self.browser.close()
 
@@ -247,7 +290,8 @@ def server_for(root, config, store, worker=None, *, read_only=False, bind_host='
         raise PilotError('Network access is only available on the private read-only dashboard')
     flow = Workflow(store)
     automation = Automation(store, flow, config, worker.catalog if isinstance(worker, Worker) else [])
-    attention = Attention(store)
+    attention = Attention(store, 'reddit' if config.get('channels') else '')
+    channels = worker.channels if isinstance(worker,Worker) else Channels(root,config,[],store,flow)
     token = secrets.token_urlsafe(32)
     nonce = secrets.token_urlsafe(24)
     port = config['port']
@@ -288,19 +332,25 @@ def server_for(root, config, store, worker=None, *, read_only=False, bind_host='
                 return self.respond(200, dict(store.summary(), browser_attention=attention.current(), read_only_dashboard=read_only, source=config['source'], ai=config['ai'], model=config['model'], poll_seconds=config['poll_seconds'], max_daily_calls=config['max_daily_calls'], max_daily_tokens=config['max_daily_tokens'], publishing=('automatic browser' if automatic(config) else 'reviewed browser') if config.get('publishing',{}).get('enabled') else 'disabled', automation=automation.status(), validation_snapshot=config.get('validation_snapshot',False), catalog=config['catalog_file'], efficiency=flow.metrics(), pacing=flow.pacing(config),next_scan_at=store.setting('next_scan_at')))
             if self.path == '/api/campaign-options':
                 return self.respond(200, {'communities':[{'name':sub,'policy':policy(config,sub)} for sub in config['subreddits']], 'enabled':config['ai']=='oneapi'})
+            if self.path == '/api/channels':
+                return self.respond(200, {'channels':channels.status(), 'reddit_profiles':len(config.get(config.get('browser_backend',''),{}).get('profiles',[])) or 1,
+                                          'allocation':'One account per platform. Add a forum only after choosing its destination and rules.'})
             if self.path == '/api/items':
                 outbox = {r['item_id']:r for r in flow.outbox()}
                 rows=[]
                 for r in store.items():
+                    platform = r['payload'].get('platform','reddit')
+                    ch = next((x for x in config.get('channels',[]) if x['id']==platform),None)
+                    item_config = channels.config(ch) if ch else config
                     blocker=''
                     if is_campaign(r['payload']):
-                        try: require_post_policy(r['payload'],config)
+                        try: require_post_policy(r['payload'],item_config)
                         except PilotError as error: blocker=str(error)
                     if automatic(config) and r['result'] and r['result']['decision']=='recommend' and r['status'] in ('review','approved'):
                         try:
-                            with store.db() as c: require_checked(c,r['id'],r['payload'],r['result'],config)
+                            with store.db() as c: require_checked(c,r['id'],r['payload'],r['result'],item_config)
                         except PilotError as error: blocker=str(error)
-                    rows.append(dict(r,reply_account=publisher_for(config,r['payload']['subreddit']),draft_hash=draft_hash(publication_text(r['result'])) if r['result'] else '',publication=outbox.get(r['id']),publication_blocker=blocker))
+                    rows.append(dict(r,reply_account=publisher_for(item_config,r['payload']['subreddit']),draft_hash=draft_hash(publication_text(r['result'])) if r['result'] else '',publication=outbox.get(r['id']),publication_blocker=blocker))
                 return self.respond(200, rows)
             return self.respond(404, {'error': 'Not found'})
 
@@ -318,12 +368,17 @@ def server_for(root, config, store, worker=None, *, read_only=False, bind_host='
                 payload = json.loads(self.rfile.read(n))
                 if not isinstance(payload, dict):
                     raise PilotError('Invalid JSON object')
-                if self.path == '/api/control':
+                if self.path == '/api/channels/control':
+                    if not worker: raise PilotError('Worker is unavailable')
+                    channels.command(payload.get('channel'),payload.get('action'))
+                elif self.path == '/api/control':
                     if payload.get('action') not in ('pause', 'resume'):
                         raise PilotError('Unknown action')
-                    if payload['action'] == 'resume' and config['source'] == 'browser':
+                    if payload['action'] == 'resume' and config['source'] == 'browser' and not config.get('channels'):
                         require_live_permission(config, load_catalog(root, config))
-                    if payload['action'] == 'pause':
+                    if config.get('channels'):
+                        store.set_setting('paused','1' if payload['action']=='pause' else '0')
+                    elif payload['action'] == 'pause':
                         attention.pause()
                     else:
                         attention.resume()

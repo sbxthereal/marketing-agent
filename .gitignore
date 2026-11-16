@@ -6,6 +6,7 @@ runtime/
 __pycache__/
 *.pyc
 config.json
+channels.json
 catalog.live.json
 *.sqlite3
 *.sqlite3-*

@@ -8,6 +8,7 @@ STOPWORDS = set('the and that this with from have your you for are can could wou
 
 def reply_body(text):
     text = re.sub(r'https?://\S+', '', text)
+    text = text.replace('Automated MeDo team response.', '')
     return re.sub(r'I work on MeDo\.', '', text, flags=re.I).strip()
 
 
@@ -25,8 +26,9 @@ def concerns(draft, post):
     body = reply_body(draft)
     words = body.split()
     issues = []
-    if not 30 <= len(words) <= 80:
-        issues.append('Reply must be 30–80 words')
+    cap = 100 if post.get('platform','reddit') != 'reddit' else 80
+    if not 30 <= len(words) <= cap:
+        issues.append('Reply must be 30–'+str(cap)+' words')
     if not re.search(r'\bMeDo\b', ' '.join(words[:18])):
         issues.append('Recommend MeDo directly in the opening sentence')
     if re.search(r'\b(great question|game.?changer|seamless|leverage|revolutionary|powerful platform|low.friction|hope this helps|check it out|sign up now|mobile product)\b', body, re.I):

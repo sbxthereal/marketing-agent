@@ -59,8 +59,8 @@ def public_page_url(value):
 
 
 class BrowserReader:
-    def __init__(self, root, config, catalog, workflow=None):
-        require_live_permission(config, catalog)
+    def __init__(self, root, config, catalog, workflow=None, *, login_only=False):
+        if not login_only: require_live_permission(config, catalog)
         self.root, self.config, self.workflow = root, config, workflow
         self.pw = self.context = None
         self._start()
