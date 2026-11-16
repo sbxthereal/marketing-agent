@@ -84,7 +84,7 @@ def thread_permalink(url, post, allowed):
         return False
 
 
-def validate_campaign_result(raw, post, catalog, config):
+def validate_campaign_result(raw, post, catalog, config, *, check_style=True):
     fields = {'decision','reason','title','draft','template_id','evidence','claim_ids'}
     if not isinstance(raw, dict) or set(raw) != fields or raw['decision'] not in ('recommend','review','skip'):
         raise PilotError('Invalid MeDo post response schema')
@@ -109,7 +109,7 @@ def validate_campaign_result(raw, post, catalog, config):
         raise PilotError('MeDo post length or title does not meet the destination requirements')
     if re.search(r'https?://|www\.|\]\(|\b(guaranteed|game.?changer|revolutionary|sign up now|upvote|unlimited|100% secure|production.ready)\b',copy,re.I):
         raise PilotError('Remove model links, pressure or unsupported marketing claims')
-    if re.search(r'\b(mobile product|medo lists|it lists|can be considered as|the catalog says|the documentation states)\b',copy,re.I):
+    if check_style and re.search(r'\b(mobile product|medo lists|it lists|can be considered as|the catalog says|the documentation states)\b',copy,re.I):
         raise PilotError('Replace catalog-style wording with direct, specific prose')
     if re.search(r'\b(i used|i.ve used|my clients|our customers|we built|i built)\b',copy,re.I):
         raise PilotError('Remove unverified first-hand claims')
@@ -123,12 +123,12 @@ def validate_campaign_result(raw, post, catalog, config):
 
 def analyze_campaign(gateway, post, catalog, config, store):
     from .gateway import parse_recommendation
-    from .channels import channel_style
+    from .channels import platform_prompt
     held = {'decision':'review','reason':'','title':'','draft':'','template_id':'','evidence':'','claim_ids':[]}
     data = {'format':post['format'],'brief':post['body'], 'community':post['subreddit'],
             'community_rules':policy(config,post['subreddit']),
             'catalog':[dict({k:t[k] for k in ('id','name','claims','limitations')},allowed_claim_ids=list(t['claims'])) for t in catalog]}
-    messages = [{'role':'system','content':SYSTEM + channel_style(post, campaign=True)},{'role':'user','content':json.dumps(data,ensure_ascii=False)}]
+    messages = [{'role':'system','content':platform_prompt(SYSTEM,post,campaign=True)},{'role':'user','content':json.dumps(data,ensure_ascii=False)}]
     for stage in ('draft','quality'):
         model = config.get('review_model',config['model']) if stage == 'quality' else config['model']
         reserve = len(json.dumps(messages,ensure_ascii=False).encode())+config['max_output_tokens']+1000
@@ -140,7 +140,9 @@ def analyze_campaign(gateway, post, catalog, config, store):
         try:
             text,usage,latency = gateway.chat(model,messages,config['max_output_tokens'])
             raw = parse_recommendation(text)
-            result = validate_campaign_result(raw,post,catalog,config)
+            # Give the one bounded editor pass a chance to fix prose. Grounding,
+            # links, fabrication and schema checks still run on both stages.
+            result = validate_campaign_result(raw,post,catalog,config,check_style=stage == 'quality')
             store.finish_call(call,usage,latency,True)
         except Exception as error:
             store.finish_call(call,usage,latency or round((time.monotonic()-start)*1000),False)

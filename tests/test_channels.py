@@ -143,6 +143,15 @@ class ChannelTests(unittest.TestCase):
         message = messages_for(dict(self.post,platform_type='dev'),[])[0]['content']
         self.assertIn('Destination: dev',message)
         self.assertIn('unrelated article',message)
+        self.assertNotIn('30–65 words',message)
+
+    def test_dev_article_prompt_has_one_consistent_length_requirement(self):
+        from pilot.channels import platform_prompt
+        from pilot.campaigns import SYSTEM
+        message=platform_prompt(SYSTEM,dict(platform='dev',platform_type='dev'),campaign=True)
+        self.assertNotIn('80–240 words',message)
+        self.assertNotIn('110–180 words',message)
+        self.assertIn('300–600 words',message)
 
     def test_campaign_url_and_namespace_are_platform_specific(self):
         post = create_campaign(self.cfg['automation']['campaign_plan'][0],self.cfg)

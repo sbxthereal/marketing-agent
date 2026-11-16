@@ -168,6 +168,18 @@ def channel_style(post, campaign=False):
             'Code adds team and automation disclosures.')
 
 
+def platform_prompt(system, post, *, campaign=False):
+    """Replace inherited Reddit instructions, rather than append contradictions."""
+    kind = post.get('platform_type',post.get('platform','reddit'))
+    if kind == 'reddit': return system
+    system = system.replace('Reddit', 'DEV Community' if kind == 'dev' else 'founder forum')
+    if campaign and kind == 'dev':
+        system = system.replace('110–180 words','300–600 words').replace('80–240 words','300–600 words')
+    elif not campaign:
+        system = system.replace('30–65 words','40–100 words')
+    return system + channel_style(post,campaign)
+
+
 class Channels:
     """Runs on the existing worker thread; HTTP handlers enqueue commands only."""
     def __init__(self, root, base, catalog, store, flow):

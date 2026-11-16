@@ -126,6 +126,20 @@ class CampaignTests(unittest.TestCase):
         result=analyze_campaign(gateway,self.post,self.catalog,self.config,self.store)
         self.assertEqual(result['decision'],'review');self.assertEqual(result['draft'],'');self.assertEqual(gateway.chat.call_count,1)
 
+    def test_editor_can_repair_catalog_prose_without_an_extra_retry(self):
+        first=dict(self.raw,draft=COPY+' The catalog says you can refine the screens in chat.')
+        gateway=Mock();gateway.chat.side_effect=[(json.dumps(x),{},1) for x in (first,self.raw)]
+        result=analyze_campaign(gateway,self.post,self.catalog,self.config,self.store)
+        self.assertEqual(result['decision'],'recommend');self.assertNotIn('catalog says',result['draft'])
+        self.assertEqual(gateway.chat.call_count,2)
+
+    def test_catalog_prose_left_by_editor_is_held_without_retry(self):
+        first=dict(self.raw,draft=COPY+' The catalog says you can refine the screens in chat.')
+        gateway=Mock();gateway.chat.return_value=(json.dumps(first),{},1)
+        result=analyze_campaign(gateway,self.post,self.catalog,self.config,self.store)
+        self.assertEqual(result['decision'],'review');self.assertEqual(result['draft'],'')
+        self.assertEqual(gateway.chat.call_count,2)
+
     def test_validated_campaign_uses_oneapi_without_thread_enrichment(self):
         self.config['permissions']={k:True for k in ('browser_collection','ai_processing','community_rules_reviewed')};self.config['permissions']['reference']='LOCAL FIXTURE ONLY'
         self.config['publishing']['enabled']=False
