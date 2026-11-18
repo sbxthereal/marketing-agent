@@ -1,10 +1,25 @@
-# MeDo Reddit pilot
+# MeDo Marketing Agent
 
 A local Windows/macOS worker for **new-post discovery → thread reading → MeDo matching and drafting → OneAPI quality check → browser publication → verified source link**.
 
 The deployed worker does not use Codex, ChatGPT, this chat, or desktop computer-use tools. Playwright runs on the server; all runtime AI calls (Browser Use fallback, qualification/drafting, and final reply editing) go through the configured Comate OneAPI gateway. OneAPI is the provider; `model`, `browser_model`, and `review_model` select the actual models. The defaults use DeepSeek-V4.1-Flash.
 
-**Windows Server 2022:** start with [WINDOWS.md](WINDOWS.md). **macOS:** use [START-HERE.md](START-HERE.md). Validation and remaining deployment requirements are in [VALIDATION.md](VALIDATION.md).
+**Windows Server 2022:** start with [DEPLOYMENT.md](DEPLOYMENT.md). **macOS:** use [START-HERE.md](START-HERE.md). Validation and remaining deployment requirements are in [VALIDATION.md](VALIDATION.md).
+
+## Repository and handover
+
+Private experimental iCode repository: [baidu/personal-code/sbaarayane-medo-marketing-agent](https://console.cloud.baidu-int.com/devops/icode/repos/baidu/personal-code/sbaarayane-medo-marketing-agent/tree/master). Owner: `sbaarayane`; default branch: `master`. This is the feasibility pilot; a team-owned repository is required before formal production ownership. The original GitHub history is retained, and the remotes are not automatically synchronized.
+
+| Guide | Contents |
+| --- | --- |
+| [Deployment](DEPLOYMENT.md) | Pinned release, Windows installation, account setup, update and rollback |
+| [Operations](OPERATIONS.md) | Status, logs, CAPTCHA, failures, backups and result measurement |
+| [Architecture](ARCHITECTURE.md) | Components, data flow, state boundaries and development checks |
+| [Multiple platforms](MULTIPLATFORM.md) | One account per platform, channel readiness and limitations |
+| [Automatic workflows](AUTOMATIC.md) | Autonomous replies, editorial plans and publication gates |
+| [Validation](VALIDATION.md) | What has been tested and what still requires live verification |
+
+No credentials, browser profiles, private runtime configuration or collected discussion data belong in this repository. Importing the code does not start a worker or enable live posting.
 
 ## Efficiency
 
