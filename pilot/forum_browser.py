@@ -133,6 +133,9 @@ class ForumBrowser:
         return list(posts.values())
 
     def enrich(self, post):
+        if post.get('reply_to') and post['kind']=='comment':
+            from .comment_browser import enrich_comment
+            return enrich_comment(self,post)
         if not source_url(post['url'], self.channel): raise PilotError('Invalid source thread')
         self.goto(post['url'])
         article = self.page.locator(self.selectors['article'])
@@ -169,6 +172,10 @@ class ForumBrowser:
         if nodes.count() != 1: raise PilotError('Expected one visible composer control; publishing stopped')
         return nodes
 
+    def read_thread(self, post):
+        from .comment_browser import read_forum
+        return read_forum(self,post)
+
     def ai_disclosure(self):
         if self.channel['type'] != 'dev': return
         # DEV's explicit disclosure control is mandatory, in addition to the body notice.
@@ -181,6 +188,9 @@ class ForumBrowser:
         select.select_option(matches[0]['value'])
 
     def publish(self, job, flow):
+        if job['post'].get('reply_to'):
+            from .comment_browser import publish_comment
+            return publish_comment(self,job,flow,forum=True)
         post = job['post']
         campaign = post['kind'] == 'campaign'
         if campaign:

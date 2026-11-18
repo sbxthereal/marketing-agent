@@ -192,6 +192,8 @@ class BrowserReader:
                     output.extend(self._collect_source(sub,url,query))
                     store.set_setting('search_last'+suffix,time.time())
                     store.set_setting('search_cursor'+suffix,cursor+1)
+        from .comment_browser import discover_comments
+        output.extend(discover_comments(self,output))
         return output
 
     def _collect_source(self, sub, url, query=''):
@@ -274,6 +276,9 @@ class BrowserReader:
         return output
 
     def enrich(self, post):
+        if post.get('reply_to'):
+            from .comment_browser import enrich_comment
+            return enrich_comment(self,post)
         self._goto(post['url'])
         self.page.locator('shreddit-post,.thing.link').first.wait_for(state='attached')
         data = self.page.evaluate(dom.THREAD)
@@ -285,6 +290,22 @@ class BrowserReader:
                       author=data.get('author') or post.get('author',''),posted_at=data.get('created') or post.get('posted_at',''))
         result['closed'] = bool(data['locked'] or data['archived'])
         return result
+
+    def read_thread(self, post):
+        from .conversations import thread_url
+        self._goto(post['url'])
+        self.page.locator('shreddit-post,.thing.link').first.wait_for(state='attached')
+        data=self.page.evaluate(dom.THREAD)
+        source=urlparse(post['url']).path.strip('/').split('/')
+        if len(source)<4 or data['id']!='t3_'+source[3] or not data['title']:
+            raise PilotError('Thread identity could not be verified')
+        data['closed']=bool(data['locked'] or data['archived'])
+        for c in data['comments']:
+            url=urljoin('https://www.reddit.com',c.pop('href',''))
+            if not comment_permalink(url,post,self.config['subreddits']) and re.fullmatch(r't1_[a-zA-Z0-9]+',c['id']):
+                url=thread_url(post['url'])+c['id'][3:]+'/'
+            c['url']=url if comment_permalink(url,post,self.config['subreddits']) else ''
+        return data
 
     def _account(self):
         names = self.page.evaluate(dom.ACCOUNT)
@@ -313,6 +334,9 @@ class BrowserReader:
         return None
 
     def publish(self, job, workflow):
+        if job['post'].get('reply_to'):
+            from .comment_browser import publish_comment
+            return publish_comment(self,job,workflow)
         from .campaigns import is_campaign
         if is_campaign(job['post']):
             from .thread_publish import publish_thread

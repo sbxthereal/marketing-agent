@@ -26,6 +26,8 @@ def rank(post, now=None):
     now = time.time() if now is None else now
     text = (post['title']+' '+post.get('body', '')).lower()
     signals, score = [], 0
+    if post.get('conversation_parent'):
+        signals.append('direct reply to a published message'); score += 45
     if re.search(r'\b(need|looking for|recommend|which|how (can|do)|help|easiest|alternative)\b|\?', text):
         signals.append('asks for help'); score += 30
     if re.search(r'\b(app|website|portfolio|waitlist|landing page|client portal|internal tool|booking|dashboard|database|prototype|mvp)\b', text):
@@ -34,8 +36,12 @@ def rank(post, now=None):
         signals.append('builder fits the context'); score += 10
     if re.search(r'\b(i launched|we launched|i built|we built|check out my|my new tool|here.s how|tutorial)\b', post['title'].lower()):
         signals.append('possible showcase'); score -= 25
+    if re.search(r'\b(solved|resolved|no longer need|found a solution|not looking for|no (?:ads|promotion))\b',text):
+        signals.append('resolved or declines recommendations'); score -= 40
+    if re.search(r'\b(must|need to|needs to|looking for)\b.{0,80}\b(self.host|offline|native|integrat|migration|migrat)',text):
+        signals.append('check mandatory constraints')
     created = timestamp(post.get('posted_at'))
-    if created and now-created < 86400:
+    if created and 0 <= now-created < 86400:
         signals.append('under 24 hours old'); score += 10
     return max(0, min(100, score)), signals
 

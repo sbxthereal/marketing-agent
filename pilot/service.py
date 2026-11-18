@@ -73,7 +73,9 @@ class Worker:
     def cycle(self):
         self.reddit_controls()
         self.channels.tick()
-        if self.config.get('channels') and (not self.config.get('publishing',{}).get('reddit_username') or not self.config.get('publishing',{}).get('enabled')):
+        profiles=self.config.get(self.config.get('browser_backend',''),{}).get('profiles',[])
+        accounts=all(p.get('reddit_username') for p in profiles) if profiles else self.config.get('publishing',{}).get('reddit_username')
+        if self.config.get('channels') and (not accounts or not self.config.get('publishing',{}).get('enabled')):
             # An unconfigured Reddit account must not pause unrelated channels.
             return
         self.automation.schedule()
@@ -179,6 +181,8 @@ class Worker:
         else:
             require_live_permission(self.config, self.catalog)
             self.ensure_browser()
+            from .conversations import watch
+            watch(self.store,self.flow,self.browser,self.config)
             posts=[]
             if time.monotonic() >= self.next_scan:
                 posts=self.browser.collect()
@@ -332,6 +336,9 @@ def server_for(root, config, store, worker=None, *, read_only=False, bind_host='
                 return self.respond(200, dict(store.summary(), browser_attention=attention.current(), read_only_dashboard=read_only, source=config['source'], ai=config['ai'], model=config['model'], poll_seconds=config['poll_seconds'], max_daily_calls=config['max_daily_calls'], max_daily_tokens=config['max_daily_tokens'], publishing=('automatic browser' if automatic(config) else 'reviewed browser') if config.get('publishing',{}).get('enabled') else 'disabled', automation=automation.status(), validation_snapshot=config.get('validation_snapshot',False), catalog=config['catalog_file'], efficiency=flow.metrics(), pacing=flow.pacing(config),next_scan_at=store.setting('next_scan_at')))
             if self.path == '/api/campaign-options':
                 return self.respond(200, {'communities':[{'name':sub,'policy':policy(config,sub)} for sub in config['subreddits']], 'enabled':config['ai']=='oneapi'})
+            if self.path == '/api/overview':
+                from .insights import overview
+                return self.respond(200, overview(store))
             if self.path == '/api/channels':
                 return self.respond(200, {'channels':channels.status(), 'reddit_profiles':len(config.get(config.get('browser_backend',''),{}).get('profiles',[])) or 1,
                                           'allocation':'One account per platform. Add a forum only after choosing its destination and rules.'})

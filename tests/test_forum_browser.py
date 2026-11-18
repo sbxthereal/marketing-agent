@@ -156,6 +156,7 @@ class ForumBrowserTests(unittest.TestCase):
         page=self.reader.page; errors=[]; page.on('pageerror',lambda e:errors.append(str(e)))
         page.set_default_timeout(10000)
         page.goto('http://127.0.0.1:'+str(config['port']),wait_until='domcontentloaded',timeout=10000)
+        page.get_by_role('button',name='Platforms',exact=False).first.click()
         card=page.locator('#channels article').filter(has_text='DEV Community')
         card.get_by_role('button',name='Open account login').wait_for(state='visible')
         with page.expect_response(lambda r:r.url.endswith('/api/channels/control')) as response:

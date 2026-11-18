@@ -122,6 +122,9 @@ class ProfilePool:
     def enrich(self, post):
         return self._for_post(post).enrich(post)
 
+    def read_thread(self, post):
+        return self._for_post(post).read_thread(post)
+
     def publish(self, job, workflow):
         return self._for_post(job['post']).publish(job, workflow)
 

@@ -1,6 +1,6 @@
 # MeDo Marketing Agent
 
-A local Windows/macOS worker for **new-post discovery → thread reading → MeDo matching and drafting → OneAPI quality check → browser publication → verified source link**.
+A local Windows/macOS worker for **need discovery → contextual reply or useful MeDo post → OneAPI quality check → verified publication → direct conversation follow-up**.
 
 The deployed worker does not use Codex, ChatGPT, this chat, or desktop computer-use tools. Playwright runs on the server; all runtime AI calls (Browser Use fallback, qualification/drafting, and final reply editing) go through the configured Comate OneAPI gateway. OneAPI is the provider; `model`, `browser_model`, and `review_model` select the actual models. The defaults use DeepSeek-V4.1-Flash.
 
@@ -8,7 +8,7 @@ The deployed worker does not use Codex, ChatGPT, this chat, or desktop computer-
 
 ## Repository and handover
 
-Private experimental iCode repository: [baidu/personal-code/sbaarayane-medo-marketing-agent](https://console.cloud.baidu-int.com/devops/icode/repos/baidu/personal-code/sbaarayane-medo-marketing-agent/tree/master). Owner: `sbaarayane`; default branch: `master`. This is the feasibility pilot; a team-owned repository is required before formal production ownership. The original GitHub history is retained, and the remotes are not automatically synchronized.
+Active delivery source: [GitHub · sbxthereal/marketing-agent](https://github.com/sbxthereal/marketing-agent), branch `main`. The private personal iCode repository remains a separate handover copy; its blocked server route is not required for this deployment. Pushes run GitHub validation; they do not currently install a release on Windows automatically.
 
 | Guide | Contents |
 | --- | --- |
@@ -17,6 +17,7 @@ Private experimental iCode repository: [baidu/personal-code/sbaarayane-medo-mark
 | [Architecture](ARCHITECTURE.md) | Components, data flow, state boundaries and development checks |
 | [Multiple platforms](MULTIPLATFORM.md) | One account per platform, channel readiness and limitations |
 | [Automatic workflows](AUTOMATIC.md) | Autonomous replies, editorial plans and publication gates |
+| [Growth workflow](GROWTH-WORKFLOW.md) | Comment discovery, conversation handling and the dashboard |
 | [Validation](VALIDATION.md) | What has been tested and what still requires live verification |
 
 No credentials, browser profiles, private runtime configuration or collected discussion data belong in this repository. Importing the code does not start a worker or enable live posting.
@@ -49,11 +50,11 @@ Publication defaults to disabled. The configured daily/interval limits are opera
 
 Reply pacing is persistent: at most **3 per rolling 24 hours globally**, **2 hours apart**, **2 per community per rolling 24 hours**, **6 hours apart within a community**, and no repeat pitch to the same author for **7 days**. These are maxima, not quotas. One approved community therefore permits at most two replies/day under the defaults. Similar recent replies are blocked. Existing visible MeDo mentions or prior participation by the account stop another pitch. Cooldowns are checked again immediately before submitting. An uncertain outcome pauses the worker, including after a restart.
 
-Replies aim for 40–65 words, recommend MeDo in the opening sentence, reference the actual request, and give one concrete starting step. Affiliation is appended explicitly. Unsupported features, no-promotion requests, solved issues and poor matches get no promotional draft. See [UPGRADE.md](UPGRADE.md) for the latest evidence and next improvements.
+Initial replies aim for 25–90 words, recommend MeDo in the opening sentence, reference the actual request, and give one concrete starting step. Affiliation is appended explicitly. Unsupported features, no-promotion requests, solved issues and poor matches get no promotional draft. See [UPGRADE.md](UPGRADE.md) for the latest evidence and next improvements.
 
 ## Scope
 
-This release handles top-level replies and a separate queue for standalone text posts in selected communities. It does not claim to find all Reddit conversations, monitor every new comment, or measure registrations without a connected attribution system. In r/nocode, product launches belong in the designated monthly launch thread; standalone promotional posting remains blocked unless community-specific permission is recorded. A permitted launch-thread comment is not permission for a standalone post.
+This release handles top-level replies, replies to selected comments, direct follow-ups to verified publications, and standalone text posts in selected communities. It does not claim to find all Reddit conversations, monitor every new comment, or measure registrations without a connected attribution system. In r/nocode, product launches belong in the designated monthly launch thread; standalone promotional posting remains blocked unless community-specific permission is recorded. A permitted launch-thread comment is not permission for a standalone post.
 
 The catalog contains documented MeDo capabilities and two official showcase starting points. `verified` means the cited source was checked; the showcase apps have not been functionally certified. Drafts must preserve those limitations.
 
@@ -83,7 +84,7 @@ Alerts survive worker restarts. Managed browser challenge tabs are kept open on 
 
 ## MeDo post queue
 
-The dashboard separates **Replies** from **MeDo posts**. On the server-local dashboard, choose a configured community, a tutorial/template/build-note format, and a specific brief. An explicitly queued brief gets two metered Comate OneAPI calls: drafting, then an independent claim/style edit. This queue can draft while browser discovery is paused; it never needs to open Reddit. Malformed or unsupported copy is held, and missing editor budget never releases an unchecked draft. Gateway failures stay on the affected brief.
+The dashboard separates **Opportunities**, **Conversations** and **MeDo posts**, with **Overview**, **Platforms**, and **Activity & costs** views. Searchable lists open exact source/decision/draft details. On the server-local dashboard, choose a configured community, a tutorial/template/build-note format, and a specific brief. An explicitly queued brief gets two metered Comate OneAPI calls: drafting, then an independent claim/style edit. This queue can draft while browser discovery is paused; it never needs to open Reddit. Malformed or unsupported copy is held, and missing editor budget never releases an unchecked draft. Gateway failures stay on the affected brief.
 
 The review shows the proposed title and body. Affiliation is added by code; a catalog link is included only when the recorded rules permit links. Title and body are bound together in the approval hash. In manual mode, approval and **Publish approved post** remain separate actions. In automatic mode, passing drafts enter the shared outbox directly. Replies and posts use the same outbox, global/community cooldowns, duplicate checks and uncertainty handling. The company-network dashboard remains read-only.
 

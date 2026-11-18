@@ -36,6 +36,8 @@ def require_publishing(config):
 class Workflow:
     def __init__(self, store):
         self.store = store
+        from .conversations import ensure_tables
+        ensure_tables(store)
         with store.db() as c:
             c.executescript('''
             CREATE TABLE IF NOT EXISTS scans (
@@ -114,8 +116,10 @@ class Workflow:
         local=[r for r in recent if r['subreddit']==post['subreddit'].lower()]
         if len(local)>=pub.get('max_per_subreddit_day',2):return 'Community daily publication limit reached'
         if local and now-max(r['at'] for r in local)<pub.get('subreddit_interval_seconds',21600):return 'Community publication cooldown is active'
+        from .conversations import verify_receipt
+        continuation=verify_receipt(c,post,config)
         author=self.author_key(post)
-        if author and any(r['author_hash']==author and now-r['at']<pub.get('author_cooldown_hours',168)*3600 for r in attempts):
+        if not continuation and author and any(r['author_hash']==author and now-r['at']<pub.get('author_cooldown_hours',168)*3600 for r in attempts):
             return 'This author was already contacted within the cooldown period'
         return ''
 
@@ -139,6 +143,8 @@ class Workflow:
             result = json.loads(row['result'])
             draft = result['draft']
             post = json.loads(row['payload'])
+            from .conversations import require_open
+            require_open(c,post,config)
             from .channels import require_channel_ready
             require_channel_ready(self.store, config, post)
             if automatic:
@@ -206,6 +212,11 @@ class Workflow:
                     continue
                 from .channels import require_channel_ready
                 require_channel_ready(self.store, config, post)
+                from .conversations import require_open
+                try: require_open(c,post,config)
+                except PilotError as error:
+                    c.execute("UPDATE outbox SET state='blocked',error=?,updated=? WHERE item_id=?",(str(error),now,row['item_id']))
+                    continue
                 if row['item_status'] != 'approved' or now-row['requested'] > pub.get('approval_hours', 24)*3600 or not row['result'] or draft_hash(publication_text(json.loads(row['result']))) != row['draft_hash']:
                     c.execute("UPDATE outbox SET state='cancelled',error='Approval expired or draft changed',updated=? WHERE item_id=?", (now,row['item_id']))
                     continue
@@ -244,6 +255,8 @@ class Workflow:
                 post=json.loads(row['payload'])
                 from .channels import require_channel_ready
                 require_channel_ready(self.store, config, post)
+                from .conversations import require_open
+                require_open(c,post,config)
                 if row['approval_source'] == 'automatic':
                     from .automation import require_checked
                     require_checked(c, item_id, post, json.loads(row['result']), config)

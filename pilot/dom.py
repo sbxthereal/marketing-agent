@@ -29,11 +29,14 @@ THREAD = r'''() => {
  locked:post?.hasAttribute('is-locked') || document.querySelector('.locked-infobar')!==null,
  archived:post?.hasAttribute('is-archived') || document.querySelector('.archived-infobar')!==null,
  comments:[...document.querySelectorAll('shreddit-comment,.thing.comment')].slice(0,250).map(e=>{
-   const b=e.querySelector('[slot="comment"],.usertext-body .md');
+   const own=q=>[...e.querySelectorAll(q)].find(x=>x.closest('shreddit-comment,.thing.comment')===e);
+   const b=own('[slot="comment"],.usertext-body .md');
    return {body:(b?.innerText || '').slice(0,5000),
-     author:e.getAttribute('author') || e.querySelector('a.author')?.innerText || '',
+     author:e.getAttribute('author') || own('a.author')?.innerText || '',
      id:e.getAttribute('thingid') || e.getAttribute('data-fullname') || '',
-     href:e.getAttribute('permalink') || e.querySelector('a.bylink')?.href || ''};
+     parent_id:e.getAttribute('parentid') || e.getAttribute('data-parent-fullname') || e.parentElement?.closest('shreddit-comment,.thing.comment')?.getAttribute('thingid') || e.parentElement?.closest('.thing.comment')?.getAttribute('data-fullname') || post?.getAttribute('id') || post?.getAttribute('data-fullname') || '',
+     created:e.getAttribute('created-timestamp') || own('time')?.getAttribute('datetime') || '',
+     href:e.getAttribute('permalink') || own('a.bylink')?.href || ''};
  }).filter(c=>c.body)};
 }'''
 

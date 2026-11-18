@@ -4,9 +4,9 @@ This runbook deploys the MeDo marketing **pilot** on Windows Server 2022. It cov
 
 ## Source and release ownership
 
-- iCode: `baidu/personal-code/sbaarayane-medo-marketing-agent`, default branch `master`.
-- Owner: `sbaarayane`. This is a private personal experiment repository, subject to iCode's personal-repository lifecycle and directory-administrator access. Move to an authorized team repository before making it the formal production source of record.
-- Original source: `https://github.com/sbxthereal/marketing-agent`. The imported Git history is retained. Publishing to iCode does not deploy the server or synchronize the two remotes automatically.
+- Active source: `https://github.com/sbxthereal/marketing-agent`, branch `main`.
+- The personal iCode copy is retained for handover. Its server route is unavailable; no iCode updater is installed.
+- GitHub CI validates pushes. Windows installation remains a pinned, validated release transfer; pushing code alone does not deploy it.
 - Deploy an exact commit. Keep the previous release, dependency environment and local state until the replacement has been verified.
 
 ## Requirements
@@ -25,13 +25,12 @@ The current scheduler starts **at user logon**, not before login after a reboot.
 
 ## 1. Prepare a release on your development computer
 
-Use your authorized iCode login. Current installations call the CLI `icode`; older ones call it `icode-cli`.
+Use your existing authorized GitHub login. Never put credentials in the clone URL.
 
 ```sh
-icode login
-icode git clone --repo baidu/personal-code/sbaarayane-medo-marketing-agent --path medo-marketing-agent
+git clone https://github.com/sbxthereal/marketing-agent.git medo-marketing-agent
 cd medo-marketing-agent
-git switch master
+git switch main
 git status --short
 ```
 

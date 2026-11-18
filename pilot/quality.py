@@ -26,10 +26,12 @@ def concerns(draft, post):
     body = reply_body(draft)
     words = body.split()
     issues = []
-    cap = 100 if post.get('platform','reddit') != 'reddit' else 80
-    if not 30 <= len(words) <= cap:
-        issues.append('Reply must be 30–'+str(cap)+' words')
-    if not re.search(r'\bMeDo\b', ' '.join(words[:18])):
+    followup=bool(post.get('conversation_parent'))
+    cap = 120 if followup or post.get('platform','reddit') != 'reddit' else 90
+    floor = 8 if followup else 25
+    if not floor <= len(words) <= cap:
+        issues.append('Reply must be '+str(floor)+'–'+str(cap)+' words')
+    if not followup and not re.search(r'\bMeDo\b', ' '.join(words[:25])):
         issues.append('Recommend MeDo directly in the opening sentence')
     if re.search(r'\b(great question|game.?changer|seamless|leverage|revolutionary|powerful platform|low.friction|hope this helps|check it out|sign up now|mobile product)\b', body, re.I):
         issues.append('Remove generic or sales language')
@@ -40,7 +42,7 @@ def concerns(draft, post):
         if subject in body.lower() and subject not in source.lower():
             issues.append('Remove the unrequested '+subject+' aside')
     specific = lambda t: {w for w in re.findall(r'[a-z]{4,}', t.lower()) if w not in STOPWORDS}
-    if len(specific(source) & specific(body)) < 2:
+    if len(specific(source) & specific(body)) < (1 if followup else 2):
         issues.append('Reply lacks enough details from this person’s request')
     return issues
 
@@ -52,6 +54,9 @@ def hold(result, reason):
 def context_skip(post, username=''):
     if username and post.get('author', '').lower() == username.lower():
         return 'Own account’s thread; no promotional reply'
+    from .conversations import stop_reason
+    if post.get('conversation_parent'):
+        return stop_reason(original_text(post))
     replies = ' '.join(c['body'] for c in discussion(post))
     if re.search(r'\bmedo\b', replies, re.I):
         return 'MeDo is already mentioned in the visible discussion; avoid repeating the recommendation'

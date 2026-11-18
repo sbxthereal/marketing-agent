@@ -262,6 +262,8 @@ class Channels:
                 automation = Automation(self.store, self.flow, cfg, self.catalog)
                 automation.schedule()
                 browser = self.browser(ch, cfg)
+                from .conversations import watch
+                watch(self.store,self.flow,browser,cfg)
                 if time.time() >= self.next_scan.get(ch['id'], 0):
                     started = time.time()
                     posts = browser.collect()
@@ -279,7 +281,7 @@ class Channels:
                             post = validate_post(post, cfg)
                             self.flow.enrich(post)
                             at = timestamp(post.get('posted_at', ''))
-                            if not at or time.time()-at > cfg['lookback_hours']*3600:
+                            if (not at and not post.get('conversation_parent')) or (at and time.time()-at > cfg['lookback_hours']*3600):
                                 self.store.complete(post['id'], dict(decision='skip', reason='Missing timestamp or older than the discovery window', template_id='', evidence='', claim_ids=[], draft=''))
                                 continue
                             skip = context_skip(post,cfg['publishing']['reddit_username'])
@@ -326,12 +328,15 @@ class Channels:
         from .automation import Automation
         reddit = Automation(self.store,self.flow,self.base,self.catalog).status()
         blockers = list(reddit['blockers'])
-        if not self.base['publishing'].get('reddit_username'): blockers.append('Sign in and connect the Reddit account')
+        profiles=self.base.get(self.base.get('browser_backend',''),{}).get('profiles',[])
+        accounts=[p.get('reddit_username','') for p in profiles] if profiles else [self.base['publishing'].get('reddit_username','')]
+        if not all(accounts): blockers.append('Sign in and connect each assigned Reddit account')
         if self.store.setting('paused.reddit') == '1': blockers.append('Reddit channel is paused')
         with self.store.db() as c:
             counts = dict(c.execute("SELECT status,COUNT(*) FROM items WHERE COALESCE(json_extract(payload,'$.platform'),'reddit')='reddit' GROUP BY status"))
-        output = [dict(id='reddit',platform='reddit',name='Reddit',profiles=1,account=self.base['publishing'].get('reddit_username',''),
-                       state='ready' if not blockers else 'waiting',blockers=blockers,alert='',counts=counts,last_scan='')]
+            last_scan=c.execute("SELECT MAX(started) FROM scans WHERE subreddit IN ("+','.join('?' for _ in self.base['subreddits'])+")",self.base['subreddits']).fetchone()[0] if self.base['subreddits'] else None
+        output = [dict(id='reddit',platform='reddit',name='Reddit',profiles=len(profiles) or 1,account=', '.join(a for a in accounts if a),
+                       state='ready' if not blockers else 'waiting',blockers=blockers,alert='',counts=counts,last_scan=last_scan)]
         for ch in self.base.get('channels', []):
             cfg = self.config(ch)
             blockers = []
